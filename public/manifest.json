@@ -1,0 +1,17 @@
+{
+  "short_name": "MindSync",
+  "name": "MindSync — Ideias e Tarefas com IA",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#0c0f17",
+  "theme_color": "#0c0f17",
+  "display": "standalone",
+  "orientation": "portrait"
+}
