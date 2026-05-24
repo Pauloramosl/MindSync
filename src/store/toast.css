@@ -1,0 +1,195 @@
+/* Styles for Premium Glassmorphic Toasts - Stage 3 Motion */
+
+.toast-container {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  z-index: 1000;
+  max-width: 360px;
+  width: calc(100vw - 48px);
+  pointer-events: none;
+}
+
+.toast-card {
+  pointer-events: auto;
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-mini);
+  box-shadow: var(--shadow);
+  padding: 14px 16px;
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.toast-card:hover {
+  transform: translateY(-2px) scale(1.01);
+  box-shadow: var(--shadow), var(--shadow-glow);
+}
+
+.toast-header-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.toast-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.toast-icon.success { color: var(--status-done); }
+.toast-icon.error { color: var(--priority-urgent); }
+.toast-icon.offline { color: var(--priority-high); }
+.toast-icon.sync { color: var(--accent); }
+.toast-icon.upload { color: var(--secondary); }
+.toast-icon.voice { color: var(--accent); }
+.toast-icon.ai { color: var(--secondary); }
+
+.toast-text-container {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex-grow: 1;
+  min-width: 0;
+}
+
+.toast-title {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.toast-message {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  line-height: 1.35;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.toast-close-btn {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color var(--transition-fast);
+  margin-top: 2px;
+}
+
+.toast-close-btn:hover {
+  color: var(--text-primary);
+}
+
+/* Barra de progresso do auto-dismiss */
+.toast-progress-bar-container {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.toast-progress-bar-fill {
+  height: 100%;
+  width: 100%;
+  background: var(--accent);
+  transform-origin: left;
+  animation: shrinkProgress linear forwards;
+}
+
+/* Cores específicas das barras */
+.toast-card.success .toast-progress-bar-fill { background: var(--status-done); }
+.toast-card.error .toast-progress-bar-fill { background: var(--priority-urgent); }
+.toast-card.offline .toast-progress-bar-fill { background: var(--priority-high); }
+.toast-card.sync .toast-progress-bar-fill { background: var(--accent); }
+.toast-card.upload .toast-progress-bar-fill { background: var(--secondary); }
+.toast-card.voice .toast-progress-bar-fill { background: var(--accent); }
+.toast-card.ai .toast-progress-bar-fill { background: var(--secondary); }
+
+/* Animações e Micro-transições */
+
+/* 1. Entrada: Slide Left + Fade In (vindo da direita para a esquerda) */
+.toast-card.entry-animation {
+  animation: slideLeftIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+/* 2. Saída: Fade Out + Scale Down */
+.toast-card.exit-animation {
+  animation: scaleFadeOut 0.22s cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
+/* 3. Notificação Crítica: Pulso Leve */
+.toast-card.error, .toast-card.offline {
+  animation: slideLeftIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards, criticalPulse 3s infinite ease-in-out;
+}
+
+/* 4. Rotação do ícone de Sincronização */
+.spin-animation {
+  animation: spinCw 1.2s linear infinite;
+}
+
+/* 5. Respiração suave do ícone */
+.pulse-animation {
+  animation: breatheSoft 1.5s infinite ease-in-out;
+}
+
+@keyframes shrinkProgress {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+
+@keyframes slideLeftIn {
+  from {
+    opacity: 0;
+    transform: translateX(100%) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@keyframes scaleFadeOut {
+  from {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.85) translateY(12px);
+  }
+}
+
+@keyframes criticalPulse {
+  0%, 100% {
+    box-shadow: var(--shadow);
+    border-color: var(--glass-border);
+  }
+  50% {
+    box-shadow: 0 0 16px rgba(239, 68, 68, 0.25);
+    border-color: rgba(239, 68, 68, 0.4);
+  }
+}
+
+@keyframes spinCw {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes breatheSoft {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 0.75;
+  }
+}

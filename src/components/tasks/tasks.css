@@ -1,0 +1,248 @@
+/* Tasks Module Stylesheet - Kanban Board, Task Cards, Progress Bars */
+
+/* ==================== KANBAN BOARD ==================== */
+.kanban-board {
+  display: flex;
+  gap: 20px;
+  width: 100%;
+  overflow-x: auto;
+  padding-bottom: 16px;
+  min-height: calc(100vh - 200px);
+}
+
+.kanban-column {
+  flex: 1;
+  min-width: 280px;
+  max-width: 360px;
+  background: var(--bg-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.kanban-column-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--glass-border);
+  padding-bottom: 10px;
+}
+
+.kanban-column-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.kanban-column-title::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  display: inline-block;
+}
+
+.column-todo .kanban-column-title::before { background: var(--status-todo); }
+.column-doing .kanban-column-title::before { background: var(--status-doing); }
+.column-waiting .kanban-column-title::before { background: var(--status-waiting); }
+.column-review .kanban-column-title::before { background: var(--status-review); }
+.column-done .kanban-column-title::before { background: var(--status-done); }
+
+.kanban-column-counter {
+  font-size: 0.75rem;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-weight: 700;
+}
+
+.kanban-cards-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex-grow: 1;
+  overflow-y: auto;
+  max-height: calc(100vh - 280px);
+}
+
+/* ==================== TASK CARD ==================== */
+.task-card {
+  border-top: 3px solid var(--glass-border);
+}
+
+.task-card.priority-low { border-top-color: var(--priority-low); }
+.task-card.priority-medium { border-top-color: var(--priority-medium); }
+.task-card.priority-high { border-top-color: var(--priority-high); }
+.task-card.priority-urgent { border-top-color: var(--priority-urgent); }
+
+.task-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.task-card-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+
+.task-card-desc {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Conexão com Ideia Original */
+.task-card-origin {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.7rem;
+  color: var(--primary);
+  background: var(--primary-glow);
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  margin-bottom: 12px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Checklist Progress */
+.task-checklist-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.task-progress-bar-bg {
+  width: 100%;
+  height: 4px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+  margin-bottom: 14px;
+}
+
+.task-progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--primary) 0%, var(--secondary) 100%);
+  border-radius: var(--radius-full);
+  transition: width 0.3s ease;
+}
+
+/* Deadline & Ações */
+.task-card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-top: 1px solid var(--glass-border);
+  padding-top: 10px;
+}
+
+.task-card-deadline {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.task-card-deadline.alert {
+  color: var(--priority-urgent);
+  font-weight: 600;
+}
+
+.task-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Checklist Interno Detalhado */
+.task-checklist-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 12px 0;
+  padding: 8px;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+}
+
+.task-checklist-detail-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 0.75rem;
+  transition: opacity var(--transition-fast), transform var(--transition-fast);
+}
+
+.task-checklist-detail-row input[type="checkbox"] {
+  cursor: pointer;
+  margin-top: 2px;
+}
+
+.task-checklist-detail-row span {
+  flex-grow: 1;
+  line-height: 1.3;
+  transition: color var(--transition-fast);
+}
+
+.task-checklist-detail-row.completed {
+  opacity: 0.65;
+  transform: translateX(2px);
+}
+
+.task-checklist-detail-row.completed span {
+  text-decoration: line-through;
+  color: var(--text-muted);
+}
+
+
+/* Seletor Rápido de Coluna */
+.column-shift-select {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xs);
+  font-size: 0.7rem;
+  padding: 2px 4px;
+  color: var(--text-secondary);
+}
+
+.column-shift-select:focus {
+  border-color: var(--primary);
+}
+
+@media (max-width: 900px) {
+  .kanban-board {
+    flex-direction: column;
+    overflow-x: visible;
+  }
+  
+  .kanban-column {
+    max-width: 100%;
+    min-height: auto;
+  }
+}
