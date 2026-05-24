@@ -95,7 +95,7 @@ export default function Settings() {
             <div className="settings-info">
               <span className="settings-label">Chave da API da Groq (Whisper)</span>
               <p className="settings-desc">
-                Necessária para a transcrição de áudio em tempo real pelo celular. Suas credenciais são guardadas de forma totalmente segura no seu navegador.
+                Em produção, o Netlify usa a chave segura do servidor para transcrever áudio. Este campo é opcional e serve como override local para desenvolvimento ou para usar sua própria cota pessoal.
               </p>
             </div>
             <div className="settings-control api-key-control">

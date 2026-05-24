@@ -195,11 +195,9 @@ export async function generateTasksFromIdea(ideaTitle, ideaDescription) {
   };
 }
 
-/**
- * Transcreve o áudio gravado em formato Blob usando a API da Groq.
- */
-export async function transcribeAudio(audioBlob, mimeType = 'audio/webm') {
+async function getLocalGroqApiKey() {
   let apiKey = null;
+
   try {
     const preferences = await userPreferenceService.getPreferences();
     apiKey = preferences?.groqApiKey;
@@ -211,18 +209,53 @@ export async function transcribeAudio(audioBlob, mimeType = 'audio/webm') {
     apiKey = import.meta.env.VITE_GROQ_API_KEY;
   }
 
+  return apiKey;
+}
+
+function getAudioExtension(mimeType) {
+  if (mimeType.includes('ogg')) return 'ogg';
+  if (mimeType.includes('mp4')) return 'mp4';
+  if (mimeType.includes('wav')) return 'wav';
+  if (mimeType.includes('mpeg') || mimeType.includes('mp3')) return 'mp3';
+  return 'webm';
+}
+
+async function transcribeAudioWithProxy(audioBlob, mimeType) {
+  const response = await fetch('/api/transcribe', {
+    method: 'POST',
+    headers: {
+      'Content-Type': mimeType
+    },
+    body: audioBlob
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    const error = new Error(data.message || `Erro ao transcrever áudio: ${response.statusText}`);
+    error.code = data.error;
+    error.status = response.status;
+    throw error;
+  }
+
+  if (typeof data.text !== 'string') {
+    const error = new Error('Resposta inválida do proxy de transcrição.');
+    error.code = 'invalid_proxy_response';
+    throw error;
+  }
+
+  return data.text;
+}
+
+async function transcribeAudioWithLocalKey(audioBlob, mimeType) {
+  const apiKey = await getLocalGroqApiKey();
+
   if (!apiKey) {
-    throw new Error("Chave da API da Groq não configurada. Defina a chave nas Configurações do app ou como VITE_GROQ_API_KEY no arquivo .env.local.");
+    throw new Error("Chave da API da Groq não configurada. Defina GROQ_API_KEY no Netlify ou use uma chave local nas Configurações do app / VITE_GROQ_API_KEY no .env.local.");
   }
 
   const formData = new FormData();
-  
-  // Determina a extensão correta baseada no mimeType real do MediaRecorder
-  let ext = 'webm';
-  if (mimeType.includes('ogg')) ext = 'ogg';
-  else if (mimeType.includes('mp4')) ext = 'mp4';
-  else if (mimeType.includes('wav')) ext = 'wav';
-  else if (mimeType.includes('mpeg') || mimeType.includes('mp3')) ext = 'mp3';
+  const ext = getAudioExtension(mimeType);
 
   formData.append('file', audioBlob, `audio.${ext}`);
   formData.append('model', 'whisper-large-v3-turbo');
@@ -246,3 +279,28 @@ export async function transcribeAudio(audioBlob, mimeType = 'audio/webm') {
   return data.text;
 }
 
+function shouldUseLocalFallback(error) {
+  return (
+    error?.code === 'missing_server_api_key' ||
+    error?.code === 'invalid_proxy_response' ||
+    error?.status === 404 ||
+    error instanceof TypeError
+  );
+}
+
+/**
+ * Transcreve o áudio gravado em formato Blob usando o proxy Netlify.
+ * Em desenvolvimento, cai para a chave local se o proxy não estiver configurado.
+ */
+export async function transcribeAudio(audioBlob, mimeType = 'audio/webm') {
+  try {
+    return await transcribeAudioWithProxy(audioBlob, mimeType);
+  } catch (error) {
+    if (!shouldUseLocalFallback(error)) {
+      throw error;
+    }
+
+    console.warn("Proxy de transcrição indisponível; tentando fallback local com chave do navegador.", error);
+    return transcribeAudioWithLocalKey(audioBlob, mimeType);
+  }
+}

@@ -37,7 +37,7 @@ Execução (Quadro Kanban Temporal)
 *   **Status:** Concluído (Etapa 2 - Visual & UX Ricos)
 *   **Funcionalidades:**
     *   **Captura de Texto:** Campo de entrada com auto-ajuste de altura focado em digitação fluida.
-    *   **Captura de Voz (Simulado):** Botão com waveform animada que transcreve inputs por áudio simulados em tempo real.
+    *   **Captura de Voz (Real via Groq):** Botão com waveform animada que grava áudio no navegador e transcreve pela API da Groq via proxy seguro do Netlify.
     *   **Mobile Voice Bottom Sheet:** Painel tátil deslizante no mobile com waveforms interativas e digitação automática por voz.
     *   **Entrada de Mídia/Links:** Atalhos rápidos para inclusão de links web e caminhos de arquivos simulados.
     *   **Inbox Widget:** Triagem no painel central exibindo os 3 itens mais recentes pendentes de processamento.
@@ -62,12 +62,13 @@ Execução (Quadro Kanban Temporal)
     *   **Prioridades de Escopo:** Categorizações visuais em Coral Red (Urgente), Laranja (Alta), Celeste (Média) e Esmeralda (Baixa).
 
 ### IA
-*   **Status:** Em desenvolvimento (Simulado Localmente na Etapa 2)
+*   **Status:** Híbrido: heurísticas locais para organização e Groq Whisper via Netlify Functions para transcrição.
 *   **Recursos:**
     *   **Classificação Inteligente:** Filtra palavras no texto e atribui categorias como `Trabalho`, `Estudos`, `Pessoal` ou `Negócios` instantaneamente.
     *   **Resumos Rápidos:** Cria subtítulos de 1 a 2 sentenças para contextualizar capturas extensas.
     *   **Decomposição em checklists:** Transforma uma frase abstrata em um plano de ação ordenado e de 5 passos sugeridos.
     *   **Priorização Heurística:** Identifica palavras de urgência para atribuir pesos prioritários nos cartões.
+    *   **Transcrição Segura por Voz:** O app envia o áudio bruto para `/api/transcribe`; a Netlify Function chama a Groq usando `GROQ_API_KEY` no servidor, sem expor a chave ao celular.
 
 ---
 
@@ -96,6 +97,46 @@ src/
 │   └── tasks/           # TaskCards com checklists integrados
 └── views/               # Telas do Aplicativo (Inbox Dashboard, Brainstorm, Kanban, Review, Settings)
 ```
+
+Também há uma camada serverless para produção:
+
+```text
+netlify/
+└── functions/
+    └── transcribe.js    # Proxy seguro para Groq Whisper
+netlify.toml             # Build, pasta de funções e redirect /api/*
+```
+
+---
+
+## Proxy de Transcrição (Netlify + Groq)
+
+A captura de voz usa uma Netlify Function para proteger a chave da Groq. O celular envia o `Blob` de áudio diretamente para `/api/transcribe`, e a função `netlify/functions/transcribe.js` monta o `multipart/form-data` e chama `https://api.groq.com/openai/v1/audio/transcriptions` com o modelo `whisper-large-v3-turbo`.
+
+### Configuração em Produção
+1. Faça deploy do projeto no Netlify.
+2. No painel do site, acesse **Site configuration > Environment variables**.
+3. Adicione a variável:
+   *   **Nome:** `GROQ_API_KEY`
+   *   **Valor:** `gsk_...`
+4. Publique novamente o deploy se o Netlify não fizer redeploy automático após salvar a variável.
+
+O redirect em `netlify.toml` encaminha `/api/*` para `/.netlify/functions/*`, então o frontend sempre chama `/api/transcribe` na mesma origem e evita problemas de CORS.
+
+### Teste Local
+Para testar o fluxo completo localmente, use o Netlify CLI:
+
+```bash
+netlify dev
+```
+
+Com `netlify dev`, defina `GROQ_API_KEY` no ambiente local ou nas variáveis do Netlify. Se a função não estiver disponível ou a chave do servidor não estiver configurada, o frontend ainda tenta o fallback de desenvolvimento usando a chave opcional dos Ajustes ou `VITE_GROQ_API_KEY` em `.env.local`.
+
+### Teste no Celular
+1. Abra o app publicado no Netlify pelo navegador do celular.
+2. Limpe o cache se já houver uma versão antiga instalada como PWA.
+3. Toque no microfone, grave um áudio e toque novamente para parar.
+4. A transcrição deve aparecer no campo de captura sem configurar chave nenhuma no aparelho.
 
 ---
 
@@ -283,6 +324,7 @@ O MindSync adota um estilo visual refinado inspirado em Notion, Linear e Raycast
 *   `[x]` Resumo inteligente integrado nas capturas
 *   `[x]` Múltiplos Modos de Ideias (Cards, Tabela, Timeline, Kanban e Mapa Mental)
 *   `[x]` Divisão Temporal de Tarefas (Hoje, Próximas, Atrasadas, Concluídas)
+*   `[x]` Transcrição real de áudio com Groq Whisper via Netlify Functions
 *   `[ ]` Agrupamento por contexto
 *   `[ ]` Conexão inteligente entre ideias afins
 
@@ -427,5 +469,16 @@ O MindSync adota um estilo visual refinado inspirado em Notion, Linear e Raycast
         *   *Swipes em Abas:* Os controles segmentados de visualização (`.segmented-control`) passam a usar rolagem horizontal elástica no mobile para evitar compressão forçada ou quebra de blocos.
         *   *Modais e Diálogos Inteligentes:* Modais longos de triagem e rascunhos de tarefas geradas por IA (`AIPreviewModal.jsx`) agora possuem dimensões adaptáveis à tela (`max-height`) e barra de rolagem embutida exclusivamente na seção central (`.modal-body`), mantendo os botões de ação do rodapé sempre visíveis e fáceis de acionar.
 
-
-
+### Etapa 5 — API Proxy Netlify + Groq Whisper
+*   **Data:** 24 de Maio de 2026
+*   **Itens criados:** Função serverless no Netlify para transcrição segura de áudio com Groq, redirect `/api/transcribe`, fallback local de desenvolvimento e documentação de deploy/teste mobile.
+*   **Arquivos adicionados/modificados:**
+    *   `netlify/functions/transcribe.js` (NOVO - recebe áudio bruto, monta `multipart/form-data` e chama a Groq com `process.env.GROQ_API_KEY`)
+    *   `netlify.toml` (NOVO - build, diretório de funções e redirect `/api/*`)
+    *   `src/services/aiService.js` (ATUALIZADO - POST para `/api/transcribe` com fallback para chave local)
+    *   `src/views/Settings.jsx` (ATUALIZADO - campo de chave Groq tratado como override local opcional)
+    *   `README.md` (ATUALIZADO - instruções de produção, teste local e fluxo mobile)
+*   **Decisões técnicas:**
+    *   **Chave protegida no servidor:** `GROQ_API_KEY` fica somente nas variáveis de ambiente do Netlify, evitando expor credenciais no bundle do frontend.
+    *   **Áudio bruto no corpo da requisição:** O cliente envia o `Blob` diretamente com `Content-Type` correto, reduzindo dependências e complexidade no serverless.
+    *   **Fallback para desenvolvimento:** Quando o proxy não existe no `vite dev` ou o servidor não tem chave configurada, o app ainda pode usar a chave opcional dos Ajustes ou `VITE_GROQ_API_KEY` em `.env.local`.
