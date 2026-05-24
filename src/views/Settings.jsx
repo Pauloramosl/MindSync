@@ -2,11 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { useIdeas } from '../store/IdeasContext';
 import { reminderService } from '../services/reminderService';
 import GlassCard from '../components/common/GlassCard';
-import { Sliders, Bell, BrainCircuit, ShieldAlert } from 'lucide-react';
+import { Sliders, Bell, BrainCircuit, ShieldAlert, Eye, EyeOff } from 'lucide-react';
 import './views.css';
 
 export default function Settings() {
   const { settings, updateSettings } = useIdeas();
+  const [showApiKey, setShowApiKey] = useState(false);
   const [notificationPermission, setNotificationPermission] = useState(
     typeof Notification !== 'undefined' ? Notification.permission : 'default'
   );
@@ -86,6 +87,35 @@ export default function Settings() {
                 />
                 <span className="slider"></span>
               </label>
+            </div>
+          </div>
+
+          {/* Chave API do Groq */}
+          <div className="settings-row border-top-glass pt-3 mt-3">
+            <div className="settings-info">
+              <span className="settings-label">Chave da API da Groq (Whisper)</span>
+              <p className="settings-desc">
+                Necessária para a transcrição de áudio em tempo real pelo celular. Suas credenciais são guardadas de forma totalmente segura no seu navegador.
+              </p>
+            </div>
+            <div className="settings-control api-key-control">
+              <div className="api-key-input-container">
+                <input
+                  type={showApiKey ? 'text' : 'password'}
+                  className="settings-input api-key-input"
+                  placeholder="gsk_..."
+                  value={settings.groqApiKey || ''}
+                  onChange={(e) => updateSettings({ groqApiKey: e.target.value })}
+                />
+                <button
+                  type="button"
+                  className="api-key-toggle-btn"
+                  onClick={() => setShowApiKey(!showApiKey)}
+                  title={showApiKey ? "Ocultar Chave" : "Exibir Chave"}
+                >
+                  {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
             </div>
           </div>
         </GlassCard>

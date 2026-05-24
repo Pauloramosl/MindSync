@@ -288,6 +288,80 @@ input:checked + .slider:before {
   border-color: var(--primary);
 }
 
+/* Glass borders and spacing helpers */
+.border-top-glass {
+  border-top: 1px solid var(--glass-border);
+}
+.pt-3 {
+  padding-top: 16px;
+}
+.mt-3 {
+  margin-top: 16px;
+}
+
+/* Groq API Key Styling */
+.api-key-control {
+  min-width: 260px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.api-key-input-container {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  max-width: 260px;
+}
+
+.settings-input.api-key-input {
+  max-width: 100%;
+  width: 100%;
+  padding-right: 36px; /* Space for the eye button */
+  font-family: monospace;
+  letter-spacing: 0.05em;
+  font-size: 0.8rem;
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.08);
+  transition: all 0.3s ease;
+}
+
+.settings-input.api-key-input:focus {
+  border-color: var(--primary);
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.15);
+}
+
+.api-key-toggle-btn {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border-radius: 50%;
+  transition: all 0.2s ease;
+}
+
+.api-key-toggle-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+@media (max-width: 600px) {
+  .api-key-control,
+  .api-key-input-container {
+    max-width: 100% !important;
+    width: 100% !important;
+  }
+}
+
 /* Dashboard Entrance and Stagger (Etapa 3 Motion) */
 @keyframes slideDownHeader {
   from { transform: translateY(-30px); opacity: 0; }

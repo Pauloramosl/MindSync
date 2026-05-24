@@ -3,6 +3,8 @@
  * Desenvolvido para prover respostas realistas imediatas baseadas em análise semântica básica.
  */
 
+import { userPreferenceService } from './userPreferenceService';
+
 // Categorias padrão
 const CATEGORIES = ['Trabalho', 'Estudos', 'Pessoal', 'Negócios', 'Produtividade'];
 
@@ -197,9 +199,20 @@ export async function generateTasksFromIdea(ideaTitle, ideaDescription) {
  * Transcreve o áudio gravado em formato Blob usando a API da Groq.
  */
 export async function transcribeAudio(audioBlob, mimeType = 'audio/webm') {
-  const apiKey = import.meta.env.VITE_GROQ_API_KEY;
+  let apiKey = null;
+  try {
+    const preferences = await userPreferenceService.getPreferences();
+    apiKey = preferences?.groqApiKey;
+  } catch (err) {
+    console.error("Erro ao obter a chave Groq dos Ajustes:", err);
+  }
+
   if (!apiKey) {
-    throw new Error("Chave da API da Groq não configurada. Defina VITE_GROQ_API_KEY no arquivo .env.local.");
+    apiKey = import.meta.env.VITE_GROQ_API_KEY;
+  }
+
+  if (!apiKey) {
+    throw new Error("Chave da API da Groq não configurada. Defina a chave nas Configurações do app ou como VITE_GROQ_API_KEY no arquivo .env.local.");
   }
 
   const formData = new FormData();
