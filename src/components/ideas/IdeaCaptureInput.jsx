@@ -1,12 +1,15 @@
 import React, { useState, useRef } from 'react';
 import { Send, Mic, Link, FileUp, Sparkles, Loader2, Disc } from 'lucide-react';
 import { useToast } from '../../store/ToastContext';
+import { transcribeAudio } from '../../services/aiService';
 import './ideas.css';
 
 export default function IdeaCaptureInput({ onCapture }) {
   const [text, setText] = useState('');
   const [voiceState, setVoiceState] = useState('idle'); // 'idle' | 'listening' | 'processing' | 'transcribing' | 'saving'
   const textareaRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
   const { addToast } = useToast();
 
   const handleSubmit = (e) => {
@@ -37,68 +40,112 @@ export default function IdeaCaptureInput({ onCapture }) {
     e.target.style.height = `${e.target.scrollHeight}px`;
   };
 
-  // Simulação premium de Captura de Voz em 4 Estados (Etapa 3 Motion)
-  const triggerVoiceCapture = () => {
-    if (voiceState !== 'idle') return;
-    
-    // 1. ESTADO: ESCUTANDO
-    setVoiceState('listening');
-    addToast("Capturando Áudio", "Escutando som do microfone local... 🎙", "voice", 1500);
+  // Captura de Voz real com MediaRecorder e Integração com Groq API
+  const triggerVoiceCapture = async () => {
+    if (voiceState === 'idle') {
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          throw new Error("Seu navegador não suporta captura de áudio direta.");
+        }
 
-    const voiceMocks = [
-      "Estudar curso de inglês e fazer exercícios práticos amanhã cedo",
-      "Reunião urgente hoje às 14h com equipe para revisar contrato do cliente",
-      "Comprar insumos no supermercado e limpar a casa para o final de semana",
-      "Desenhar modelo de negócios enxuto canvas para a nova startup em breve"
-    ];
-    const randomVoice = voiceMocks[Math.floor(Math.random() * voiceMocks.length)];
-
-    // 2. Transição para PROCESSANDO
-    setTimeout(() => {
-      setVoiceState('processing');
-      addToast("Processando Áudio", "IA analisando espectro e ruídos de fundo...", "sync", 1000);
-
-      // 3. Transição para TRANSCREVENDO
-      setTimeout(() => {
-        setVoiceState('transcribing');
-        addToast("Transcrevendo Linguagem", "Convertendo voz em texto inteligente...", "ai", 1200);
-
-        // Digitação Progressiva Mockada
-        let currentText = '';
-        const words = randomVoice.split(' ');
-        let wordIndex = 0;
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         
-        const typeInterval = setInterval(() => {
-          if (wordIndex < words.length) {
-            currentText += (wordIndex === 0 ? '' : ' ') + words[wordIndex];
-            setText(currentText);
-            wordIndex++;
-          } else {
-            clearInterval(typeInterval);
-            
-            // 4. Transição para SALVANDO
-            setVoiceState('saving');
-            addToast("Salvando Transcrição", "Inserindo captura no seu editor de ideias...", "upload", 800);
-
-            setTimeout(() => {
-              setVoiceState('idle');
-              addToast("Sucesso", "Transcrição de áudio gerada com perfeição!", "success", 2000);
-              
-              // Focar e ajustar altura
-              if (textareaRef.current) {
-                textareaRef.current.focus();
-                setTimeout(() => {
-                  textareaRef.current.style.height = 'auto';
-                  textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
-                }, 50);
-              }
-            }, 800);
+        audioChunksRef.current = [];
+        const mediaRecorder = new MediaRecorder(stream);
+        
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data && event.data.size > 0) {
+            audioChunksRef.current.push(event.data);
           }
-        }, 150);
+        };
 
-      }, 1000);
+        mediaRecorder.onstop = async () => {
+          // Desliga o indicador do microfone no navegador parando todos os tracks do stream
+          stream.getTracks().forEach(track => track.stop());
 
-    }, 1500);
+          // 2. ESTADO: PROCESSANDO (Chamada para a API da Groq)
+          setVoiceState('processing');
+          addToast("Processando Áudio", "IA analisando espectro e ruídos de fundo...", "sync", 1500);
+
+          try {
+            const mimeType = mediaRecorder.mimeType || 'audio/webm';
+            const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
+            
+            console.log(`[MediaRecorder] Áudio gravado. Tamanho: ${audioBlob.size} bytes, Tipo: ${mimeType}`);
+
+            if (audioBlob.size < 1000) {
+              throw new Error("Sinal de áudio muito curto ou vazio. Fale próximo ao microfone e verifique se ele não está mudo.");
+            }
+            
+            // Chamar a API da Groq
+            const transcribedText = await transcribeAudio(audioBlob, mimeType);
+
+            if (!transcribedText || transcribedText.trim() === '') {
+              throw new Error("Não conseguimos capturar nenhuma fala nítida. Tente falar mais alto ou mais próximo ao microfone.");
+            }
+
+            // 3. ESTADO: TRANSCREVENDO
+            setVoiceState('transcribing');
+            addToast("Transcrevendo Linguagem", "Convertendo voz em texto inteligente...", "ai", 1500);
+
+            // Simulação de digitação progressiva do texto retornado para efeito visual premium
+            let currentText = '';
+            const words = transcribedText.split(' ');
+            let wordIndex = 0;
+
+            const typeInterval = setInterval(() => {
+              if (wordIndex < words.length) {
+                currentText += (wordIndex === 0 ? '' : ' ') + words[wordIndex];
+                setText(currentText);
+                wordIndex++;
+              } else {
+                clearInterval(typeInterval);
+
+                // 4. ESTADO: SALVANDO
+                setVoiceState('saving');
+                addToast("Salvando Transcrição", "Inserindo captura no seu editor de ideias...", "upload", 800);
+
+                setTimeout(() => {
+                  setVoiceState('idle');
+                  addToast("Sucesso", "Transcrição de áudio gerada com perfeição!", "success", 2000);
+
+                  // Focar e auto-ajustar altura
+                  if (textareaRef.current) {
+                    textareaRef.current.focus();
+                    setTimeout(() => {
+                      textareaRef.current.style.height = 'auto';
+                      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+                    }, 50);
+                  }
+                }, 800);
+              }
+            }, 100);
+
+          } catch (error) {
+            console.error("Erro na transcrição de áudio:", error);
+            setVoiceState('idle');
+            addToast("Falha na Transcrição", error.message || "Não foi possível transcrever seu áudio.", "error", 4000);
+          }
+        };
+
+        // Iniciar gravação nativa com timeslice para evitar dados vazios
+        mediaRecorder.start(250);
+        mediaRecorderRef.current = mediaRecorder;
+        
+        setVoiceState('listening');
+        addToast("Capturando Áudio", "Gravando microfone... Clique no botão novamente para parar e transcrever. 🎙", "voice", 3000);
+
+      } catch (err) {
+        console.error("Erro ao acessar microfone:", err);
+        setVoiceState('idle');
+        addToast("Permissão Negada", "Não foi possível acessar o microfone para gravação.", "error", 3000);
+      }
+    } else if (voiceState === 'listening') {
+      // Parar gravação nativa
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+      }
+    }
   };
 
   // Simulação de Captura de Link
@@ -192,8 +239,8 @@ export default function IdeaCaptureInput({ onCapture }) {
             type="button"
             className={`capture-btn ${voiceState === 'listening' ? 'active voice-breathing-active' : ''}`}
             onClick={triggerVoiceCapture}
-            title="Capturar por Voz (Simulador)"
-            disabled={isRecording}
+            title={voiceState === 'listening' ? "Parar Gravação e Transcrever" : "Capturar por Voz (Real via Groq)"}
+            disabled={voiceState !== 'idle' && voiceState !== 'listening'}
             style={{ 
               color: voiceState === 'listening' ? 'var(--accent)' : 'var(--text-secondary)',
               background: voiceState === 'listening' ? 'var(--primary-glow)' : 'transparent',

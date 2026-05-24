@@ -192,3 +192,44 @@ export async function generateTasksFromIdea(ideaTitle, ideaDescription) {
     checklist
   };
 }
+
+/**
+ * Transcreve o áudio gravado em formato Blob usando a API da Groq.
+ */
+export async function transcribeAudio(audioBlob, mimeType = 'audio/webm') {
+  const apiKey = import.meta.env.VITE_GROQ_API_KEY;
+  if (!apiKey) {
+    throw new Error("Chave da API da Groq não configurada. Defina VITE_GROQ_API_KEY no arquivo .env.local.");
+  }
+
+  const formData = new FormData();
+  
+  // Determina a extensão correta baseada no mimeType real do MediaRecorder
+  let ext = 'webm';
+  if (mimeType.includes('ogg')) ext = 'ogg';
+  else if (mimeType.includes('mp4')) ext = 'mp4';
+  else if (mimeType.includes('wav')) ext = 'wav';
+  else if (mimeType.includes('mpeg') || mimeType.includes('mp3')) ext = 'mp3';
+
+  formData.append('file', audioBlob, `audio.${ext}`);
+  formData.append('model', 'whisper-large-v3-turbo');
+  formData.append('response_format', 'json');
+  formData.append('language', 'pt');
+
+  const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`
+    },
+    body: formData
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error?.message || `Erro ao transcrever áudio: ${response.statusText}`);
+  }
+
+  const data = await response.json();
+  return data.text;
+}
+
