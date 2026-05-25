@@ -33,14 +33,35 @@ class ReminderService {
       return;
     }
 
+    const notificationOptions = {
+      icon: '/favicon.svg',
+      badge: '/favicon.svg',
+      ...options
+    };
+
+    // Tenta enviar via Service Worker (obrigatório para iOS PWA e Android Chrome mobile)
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.ready
+        .then((registration) => {
+          registration.showNotification(title, notificationOptions);
+        })
+        .catch((err) => {
+          console.warn('[ReminderService] Falha ao enviar via Service Worker, usando fallback legado:', err);
+          this.sendLegacyNotification(title, notificationOptions);
+        });
+    } else {
+      this.sendLegacyNotification(title, notificationOptions);
+    }
+  }
+
+  /**
+   * Método de fallback herdado para navegadores desktop antigos
+   */
+  sendLegacyNotification(title, options) {
     try {
-      new Notification(title, {
-        icon: '/favicon.ico',
-        badge: '/favicon.ico',
-        ...options
-      });
+      new Notification(title, options);
     } catch (err) {
-      console.error('Falha ao disparar notificação:', err);
+      console.error('[ReminderService] Falha no disparo de notificação legado:', err);
     }
   }
 

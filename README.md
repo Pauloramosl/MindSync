@@ -38,7 +38,7 @@ Execução (Quadro Kanban Temporal)
 *   **Funcionalidades:**
     *   **Captura de Texto:** Campo de entrada com auto-ajuste de altura focado em digitação fluida.
     *   **Captura de Voz (Real via Groq):** Botão com waveform animada que grava áudio no navegador e transcreve pela API da Groq via proxy seguro do Netlify.
-    *   **Mobile Voice Bottom Sheet:** Painel tátil deslizante no mobile com waveforms interativas e digitação automática por voz.
+    *   **Mobile Voice Bottom Sheet (Real e Completo):** Painel tátil deslizante e ergonômico acionado pelo botão central (`+`) que realiza gravação de áudio real, exibe timer digital ativo e ondas sonoras, transcreve com Groq Whisper de forma progressiva e permite revisão/edição completa do rascunho de texto antes do arquivamento no banco local.
     *   **Entrada de Mídia/Links:** Atalhos rápidos para inclusão de links web e caminhos de arquivos simulados.
     *   **Inbox Widget:** Triagem no painel central exibindo os 3 itens mais recentes pendentes de processamento.
     *   **Quadro de Visualizações:** Segmented control sofisticado permitindo visualizar suas ideias em 5 layouts:
@@ -469,16 +469,24 @@ O MindSync adota um estilo visual refinado inspirado em Notion, Linear e Raycast
         *   *Swipes em Abas:* Os controles segmentados de visualização (`.segmented-control`) passam a usar rolagem horizontal elástica no mobile para evitar compressão forçada ou quebra de blocos.
         *   *Modais e Diálogos Inteligentes:* Modais longos de triagem e rascunhos de tarefas geradas por IA (`AIPreviewModal.jsx`) agora possuem dimensões adaptáveis à tela (`max-height`) e barra de rolagem embutida exclusivamente na seção central (`.modal-body`), mantendo os botões de ação do rodapé sempre visíveis e fáceis de acionar.
 
-### Etapa 5 — API Proxy Netlify + Groq Whisper
+### Etapa 5 — API Proxy Netlify, PWA Service Worker, Notificações Recorrentes & Ajustes
 *   **Data:** 24 de Maio de 2026
-*   **Itens criados:** Função serverless no Netlify para transcrição segura de áudio com Groq, redirect `/api/transcribe`, fallback local de desenvolvimento e documentação de deploy/teste mobile.
+*   **Itens criados:** Função serverless no Netlify para transcrição segura de áudio com Groq, redirect `/api/transcribe`, PWA Service Worker (`sw.js`) para suporte de notificações locais robustas no mobile, scanner recorrente a cada N horas de inatividade para ideias e tarefas esquecidas com carimbo elástico e sufixo de recorrência (`Lembrete #N`), remoção completa de credenciais expostas no front-end e **ativação de gravação real de voz com revisão tátil para o botão de captura mobile**.
 *   **Arquivos adicionados/modificados:**
     *   `netlify/functions/transcribe.js` (NOVO - recebe áudio bruto, monta `multipart/form-data` e chama a Groq com `process.env.GROQ_API_KEY`)
     *   `netlify.toml` (NOVO - build, diretório de funções e redirect `/api/*`)
+    *   `public/sw.js` (NOVO - Service Worker com foco em ciclo de vida de notificações e focagem automática do app em cliques)
+    *   `src/components/layout/MobileVoiceCapture.jsx` (NOVO - componente ergonômico de áudio real, temporizador ativo e edição pré-salvamento)
+    *   `src/main.jsx` (ATUALIZADO - registro assíncrono do Service Worker na inicialização da página)
     *   `src/services/aiService.js` (ATUALIZADO - POST para `/api/transcribe` com fallback para chave local)
-    *   `src/views/Settings.jsx` (ATUALIZADO - campo de chave Groq tratado como override local opcional)
-    *   `README.md` (ATUALIZADO - instruções de produção, teste local e fluxo mobile)
+    *   `src/services/reminderService.js` (ATUALIZADO - despachador com suporte à API do Service Worker `registration.showNotification` no mobile e fallback legado `new Notification` no desktop)
+    *   `src/services/notificationService.js` (ATUALIZADO - inclusão do scanner de tarefas inativas `scanForgottenTasks`, verificação de `forgottenIdeasEnabled` e lógica matemática de re-notificação periódica a cada N horas com micro-copy `Lembrete #N`)
+    *   `src/views/Settings.jsx` (ATUALIZADO - exclusão definitiva do campo de chave API e renomeação de labels para "Itens Esquecidos" cobrindo ideias e tarefas)
+    *   `src/App.jsx` (ATUALIZADO - integração do MobileVoiceCapture substituindo o mock de áudio do mobile)
+    *   `README.md` (ATUALIZADO - instruções de produção, teste local, fluxo mobile e documentação de PWA / notificações recorrentes)
 *   **Decisões técnicas:**
     *   **Chave protegida no servidor:** `GROQ_API_KEY` fica somente nas variáveis de ambiente do Netlify, evitando expor credenciais no bundle do frontend.
     *   **Áudio bruto no corpo da requisição:** O cliente envia o `Blob` diretamente com `Content-Type` correto, reduzindo dependências e complexidade no serverless.
-    *   **Fallback para desenvolvimento:** Quando o proxy não existe no `vite dev` ou o servidor não tem chave configurada, o app ainda pode usar a chave opcional dos Ajustes ou `VITE_GROQ_API_KEY` em `.env.local`.
+    *   **Compatibilidade PWA Mobile:** Smartphones móveis exigem que a exibição de notificações locais seja feita de dentro de um Service Worker registrado. A ponte `registration.showNotification` corrigiu a limitação do construtor na thread principal, garantindo 100% de funcionamento no iOS PWA standalone e Android Chrome mobile.
+    *   **Notificações Recorrentes a cada N horas:** Substituímos o bloqueio de uma notificação por dia por um cronômetro de inatividade flexível. O scanner agora lê a última notificação despachada de cada item e re-envia o alerta caso o ciclo de tempo estipulado expire novamente, acrescentando o sufixo recursivo `(Lembrete #N)` para melhor engajamento do usuário.
+    *   **Captura Móvel Unificada e Reativa:** Conectar o botão central `+` ao motor nativo reusou a lógica de gravação modular e permitiu capturar insights por voz em qualquer tela do app, com interface de revisão (textarea) para maximizar a precisão.

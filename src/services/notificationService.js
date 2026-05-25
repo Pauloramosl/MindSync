@@ -41,9 +41,10 @@ class NotificationService {
 
       const now = Date.now();
 
-      // 1. Scanner de Ideias Esquecidas (padrão 4 horas)
-      if (preferences.forgottenIdeasTime > 0) {
+      // 1. Scanner de Ideias e Tarefas Esquecidas (padrão 4 horas)
+      if (preferences.forgottenIdeasEnabled !== false && preferences.forgottenIdeasTime > 0) {
         await this.scanForgottenIdeas(preferences, now);
+        await this.scanForgottenTasks(preferences, now);
       }
 
       // 2. Scanner de Tarefas com Deadline ou ReminderAt
@@ -84,25 +85,107 @@ class NotificationService {
     });
 
     for (const idea of forgotten) {
-      // Evita duplicar notificações para a mesma ideia no mesmo dia
-      const todayStr = new Date().toDateString();
-      const existing = await db.notifications
+      // Busca a última notificação enviada para esta ideia
+      const lastNotification = await db.notifications
         .where('targetId')
         .equals(idea.id)
-        .filter(n => n.type === 'idea_reminder' && new Date(n.createdAt).toDateString() === todayStr)
+        .filter(n => n.type === 'idea_reminder')
+        .reverse()
         .first();
 
-      if (!existing) {
+      let shouldNotify = false;
+      if (!lastNotification) {
+        // Se nunca foi notificado, envia agora
+        shouldNotify = true;
+      } else {
+        // Se já foi notificado, verifica se passou outro intervalo de limite desde a última notificação
+        const elapsedSinceLast = now - lastNotification.createdAt;
+        if (elapsedSinceLast >= thresholdMs) {
+          shouldNotify = true;
+        }
+      }
+
+      if (shouldNotify) {
+        // Conta quantas notificações já enviamos para esta ideia para gerar o número do lembrete
+        const totalSent = await db.notifications
+          .where('targetId')
+          .equals(idea.id)
+          .filter(n => n.type === 'idea_reminder')
+          .count();
+
         const title = 'Ideia Esquecida! 💡';
-        const body = `Você capturou a ideia "${idea.title}" há mais de ${thresholdHours} horas e ela continua pendente de revisão.`;
+        const suffix = totalSent > 0 ? ` (Lembrete #${totalSent + 1})` : '';
+        const body = `Você capturou a ideia "${idea.title}" e ela continua pendente de revisão há mais de ${thresholdHours} horas.${suffix}`;
         
         await notificationRepository.add({
           userId: 'user-default-123',
           targetType: 'idea',
           targetId: idea.id,
-          title,
+          title: `${title}${suffix}`,
           body,
           type: 'idea_reminder',
+          status: 'scheduled',
+          scheduledAt: now,
+          createdAt: now
+        });
+      }
+    }
+  }
+
+  /**
+   * Varre por tarefas pendentes inativas e gera alertas
+   */
+  async scanForgottenTasks(preferences, now) {
+    const thresholdHours = preferences.forgottenIdeasTime || 4;
+    const thresholdMs = thresholdHours * 60 * 60 * 1000;
+
+    // Busca todas as tarefas que não estão concluídas e não estão arquivadas
+    const allTasks = await db.tasks.toArray();
+    const forgotten = allTasks.filter(task => {
+      if (task.status === 'done' || task.isArchived) return false;
+      const timePassed = now - task.updatedAt;
+      return timePassed >= thresholdMs;
+    });
+
+    for (const task of forgotten) {
+      // Busca a última notificação enviada para esta tarefa
+      const lastNotification = await db.notifications
+        .where('targetId')
+        .equals(task.id)
+        .filter(n => n.type === 'task_reminder')
+        .reverse()
+        .first();
+
+      let shouldNotify = false;
+      if (!lastNotification) {
+        // Se nunca foi notificado, envia agora
+        shouldNotify = true;
+      } else {
+        // Se já foi notificado, verifica se passou outro intervalo de limite desde a última notificação
+        const elapsedSinceLast = now - lastNotification.createdAt;
+        if (elapsedSinceLast >= thresholdMs) {
+          shouldNotify = true;
+        }
+      }
+
+      if (shouldNotify) {
+        const totalSent = await db.notifications
+          .where('targetId')
+          .equals(task.id)
+          .filter(n => n.type === 'task_reminder')
+          .count();
+
+        const title = 'Tarefa Esquecida! 📅';
+        const suffix = totalSent > 0 ? ` (Lembrete #${totalSent + 1})` : '';
+        const body = `A tarefa "${task.title}" está pendente e sem atualizações há mais de ${thresholdHours} horas. Vamos dar um passo de ação nela?${suffix}`;
+
+        await notificationRepository.add({
+          userId: 'user-default-123',
+          targetType: 'task',
+          targetId: task.id,
+          title: `${title}${suffix}`,
+          body,
+          type: 'task_reminder',
           status: 'scheduled',
           scheduledAt: now,
           createdAt: now

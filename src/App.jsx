@@ -6,6 +6,7 @@ import { TasksProvider } from './store/TasksContext';
 import Sidebar from './components/layout/Sidebar';
 import Header from './components/layout/Header';
 import MobileNav from './components/layout/MobileNav';
+import MobileVoiceCapture from './components/layout/MobileVoiceCapture';
 import { Mic, X } from 'lucide-react';
 
 // Telas (Views)
@@ -70,52 +71,12 @@ function MainApp() {
         onQuickCaptureClick={handleQuickCaptureMobileClick}
       />
 
-      {/* MOBILE VOICE BOTTOM SHEET DRAWER (Etapa 2 Componente) */}
+      {/* MOBILE VOICE BOTTOM SHEET DRAWER */}
       {showMobileVoiceCapture && (
-        <div className="bottom-sheet-overlay" onClick={() => setShowMobileVoiceCapture(false)}>
-          <div className="bottom-sheet-panel glass-panel" onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <span style={{ fontSize: '0.9rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}>
-                <Mic size={16} style={{ color: 'var(--accent)' }} />
-                Gravação de Voz Inteligente
-              </span>
-              <button 
-                onClick={() => setShowMobileVoiceCapture(false)}
-                className="btn btn-sm btn-glass btn-circle"
-                style={{ width: '28px', height: '28px' }}
-                title="Fechar"
-              >
-                <X size={14} />
-              </button>
-            </div>
-            
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px', padding: '8px 0' }}>
-              {/* Waveform animado */}
-              <div className="voice-wave-container" style={{ height: '32px' }}>
-                <div className="voice-wave-bar" style={{ width: '3px', background: 'var(--accent)', animationDuration: '0.7s' }}></div>
-                <div className="voice-wave-bar" style={{ width: '3px', background: 'var(--accent)', animationDuration: '0.9s' }}></div>
-                <div className="voice-wave-bar" style={{ width: '3px', background: 'var(--accent)', animationDuration: '1.2s' }}></div>
-                <div className="voice-wave-bar" style={{ width: '3px', background: 'var(--accent)', animationDuration: '0.8s' }}></div>
-                <div className="voice-wave-bar" style={{ width: '3px', background: 'var(--accent)', animationDuration: '1.1s' }}></div>
-              </div>
-              
-              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', textAlign: 'center', fontStyle: 'italic' }}>
-                "Estudar curso de inglês e fazer exercícios práticos amanhã cedo..."
-              </p>
-              
-              <button 
-                className="btn btn-primary"
-                onClick={async () => {
-                  await addIdea("Estudar curso de inglês e fazer exercícios práticos amanhã cedo");
-                  setShowMobileVoiceCapture(false);
-                }}
-                style={{ width: '100%', fontSize: '0.85rem' }}
-              >
-                Concluir e Salvar no Inbox
-              </button>
-            </div>
-          </div>
-        </div>
+        <MobileVoiceCapture 
+          onClose={() => setShowMobileVoiceCapture(false)}
+          onCapture={addIdea}
+        />
       )}
       
     </div>

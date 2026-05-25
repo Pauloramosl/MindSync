@@ -2,12 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { useIdeas } from '../store/IdeasContext';
 import { reminderService } from '../services/reminderService';
 import GlassCard from '../components/common/GlassCard';
-import { Sliders, Bell, BrainCircuit, ShieldAlert, Eye, EyeOff } from 'lucide-react';
+import { Sliders, Bell, BrainCircuit, ShieldAlert } from 'lucide-react';
 import './views.css';
 
 export default function Settings() {
   const { settings, updateSettings } = useIdeas();
-  const [showApiKey, setShowApiKey] = useState(false);
   const [notificationPermission, setNotificationPermission] = useState(
     typeof Notification !== 'undefined' ? Notification.permission : 'default'
   );
@@ -90,34 +89,7 @@ export default function Settings() {
             </div>
           </div>
 
-          {/* Chave API do Groq */}
-          <div className="settings-row border-top-glass pt-3 mt-3">
-            <div className="settings-info">
-              <span className="settings-label">Chave da API da Groq (Whisper)</span>
-              <p className="settings-desc">
-                Em produção, o Netlify usa a chave segura do servidor para transcrever áudio. Este campo é opcional e serve como override local para desenvolvimento ou para usar sua própria cota pessoal.
-              </p>
-            </div>
-            <div className="settings-control api-key-control">
-              <div className="api-key-input-container">
-                <input
-                  type={showApiKey ? 'text' : 'password'}
-                  className="settings-input api-key-input"
-                  placeholder="gsk_..."
-                  value={settings.groqApiKey || ''}
-                  onChange={(e) => updateSettings({ groqApiKey: e.target.value })}
-                />
-                <button
-                  type="button"
-                  className="api-key-toggle-btn"
-                  onClick={() => setShowApiKey(!showApiKey)}
-                  title={showApiKey ? "Ocultar Chave" : "Exibir Chave"}
-                >
-                  {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
-                </button>
-              </div>
-            </div>
-          </div>
+
         </GlassCard>
 
         {/* GRUPO 2: LEMBRETES DO SISTEMA */}
@@ -148,12 +120,12 @@ export default function Settings() {
             </div>
           </div>
 
-          {/* Ideias Esquecidas */}
+          {/* Ideias e Tarefas Esquecidas */}
           <div className="settings-row">
             <div className="settings-info">
-              <span className="settings-label">Intervalo de Alerta para Ideias Esquecidas</span>
+              <span className="settings-label">Intervalo de Alerta para Itens Esquecidos</span>
               <p className="settings-desc">
-                Tempo limite de inatividade (sem edições) para a IA notificar que uma ideia nova precisa ser revisada no Inbox.
+                Tempo limite de inatividade (sem edições) para a IA notificar que uma ideia ou tarefa pendente precisa de atenção.
               </p>
             </div>
             <div className="settings-control">
@@ -233,12 +205,12 @@ export default function Settings() {
             </div>
           </div>
 
-          {/* Habilitar Scanner de Ideias Esquecidas */}
+          {/* Habilitar Scanner de Itens Esquecidos */}
           <div className="settings-row">
             <div className="settings-info">
-              <span className="settings-label">Alertar Lembretes de Ideias</span>
+              <span className="settings-label">Alertar Lembretes de Itens Esquecidos</span>
               <p className="settings-desc">
-                Ativa o scanner que avisa quando há capturas abandonadas no Inbox sem revisão.
+                Ativa o scanner que avisa quando há ideias ou tarefas abandonadas no sistema sem alteração.
               </p>
             </div>
             <div className="settings-control">
