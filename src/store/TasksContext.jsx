@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { taskService } from '../services/taskService';
+import { notificationService } from '../services/notificationService';
 import { useIdeas } from './IdeasContext';
 
 const TasksContext = createContext();
@@ -40,6 +41,7 @@ export function TasksProvider({ children }) {
     try {
       const saved = await taskService.addTask(title, description, deadline, priority);
       setTasks(prev => [...prev, saved]);
+      notificationService.queuePushScheduleSync();
       return saved;
     } catch (err) {
       console.error('Erro ao criar tarefa:', err);
@@ -53,6 +55,7 @@ export function TasksProvider({ children }) {
     try {
       const updated = await taskService.updateTask(id, updates);
       setTasks(prev => prev.map(item => item.id === id ? updated : item));
+      notificationService.queuePushScheduleSync();
     } catch (err) {
       console.error('Erro ao atualizar tarefa:', err);
     }
@@ -65,6 +68,7 @@ export function TasksProvider({ children }) {
     try {
       await taskService.deleteTask(id);
       setTasks(prev => prev.filter(item => item.id !== id));
+      notificationService.queuePushScheduleSync();
     } catch (err) {
       console.error('Erro ao excluir tarefa:', err);
     }
@@ -81,6 +85,7 @@ export function TasksProvider({ children }) {
       // Sincroniza estados em memória
       setTasks(prev => [...prev, savedTask]);
       await refreshIdeas(); // Força o IdeasContext a carregar as mudanças de status das ideias
+      notificationService.queuePushScheduleSync();
 
       return savedTask;
     } catch (err) {

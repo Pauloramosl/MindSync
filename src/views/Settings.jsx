@@ -1,22 +1,138 @@
-import React, { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useIdeas } from '../store/IdeasContext';
 import { reminderService } from '../services/reminderService';
+import { notificationService } from '../services/notificationService';
+import { pushService } from '../services/pushService';
 import GlassCard from '../components/common/GlassCard';
-import { Sliders, Bell, BrainCircuit, ShieldAlert } from 'lucide-react';
+import { Bell, BellRing, BrainCircuit, ShieldAlert } from 'lucide-react';
 import './views.css';
+
+const permissionLabels = {
+  granted: 'Permitido',
+  denied: 'Bloqueado',
+  default: 'Pendente',
+  unsupported: 'Indisponivel'
+};
+
+const webPushLabels = {
+  unsupported: 'Indisponivel',
+  missingServer: 'Servidor pendente',
+  subscribed: 'Web Push ativo',
+  ready: 'Pronto para ativar'
+};
 
 export default function Settings() {
   const { settings, updateSettings } = useIdeas();
-  const [notificationPermission, setNotificationPermission] = useState(
-    typeof Notification !== 'undefined' ? Notification.permission : 'default'
-  );
+  const [notificationPermission, setNotificationPermission] = useState(() => reminderService.getPermissionStatus());
+  const [webPushStatus, setWebPushStatus] = useState({
+    supported: pushService.isSupported(),
+    endpointAvailable: false,
+    configured: false,
+    subscribed: false
+  });
+  const [webPushBusy, setWebPushBusy] = useState(false);
 
-  // Tratamento da permissão de notificação nativa
-  const handleRequestPermission = async () => {
-    const perm = await reminderService.requestPermission();
-    if (typeof Notification !== 'undefined') {
-      setNotificationPermission(Notification.permission);
+  const syncPermissionStatus = () => {
+    setNotificationPermission(reminderService.getPermissionStatus());
+  };
+
+  const refreshWebPushStatus = async () => {
+    const status = await pushService.getStatus();
+    setWebPushStatus(status);
+    return status;
+  };
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!document.hidden) syncPermissionStatus();
+    };
+
+    window.addEventListener('focus', syncPermissionStatus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener('focus', syncPermissionStatus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!settings?.deviceId) return undefined;
+
+    let isActive = true;
+
+    pushService.getStatus().then((status) => {
+      if (isActive) {
+        setWebPushStatus(status);
+      }
+    });
+
+    return () => {
+      isActive = false;
+    };
+  }, [settings?.deviceId]);
+
+  const activateWebPush = async () => {
+    if (!settings?.deviceId) return false;
+
+    setWebPushBusy(true);
+
+    try {
+      const hasPermission = await reminderService.requestPermission();
+      syncPermissionStatus();
+
+      if (!hasPermission) {
+        window.alert('Permissao de notificacao negada. Libere as notificacoes do MindSync nas configuracoes do navegador.');
+        return false;
+      }
+
+      const result = await pushService.subscribeDevice(settings.deviceId);
+      await refreshWebPushStatus();
+
+      if (!result.ok) {
+        const message = result.reason === 'missing_vapid'
+          ? 'Web Push ainda nao esta configurado no servidor. Configure as chaves VAPID na Netlify.'
+          : 'Nao foi possivel registrar este dispositivo para Web Push agora.';
+        window.alert(message);
+        return false;
+      }
+
+      await updateSettings({ pushNotificationsEnabled: true });
+      notificationService.queuePushScheduleSync(0);
+      return true;
+    } finally {
+      setWebPushBusy(false);
     }
+  };
+
+  const handleRequestPermission = async () => {
+    await activateWebPush();
+  };
+
+  const handleTestNotification = async () => {
+    const active = await activateWebPush();
+    if (!active || !settings?.deviceId) return;
+
+    const serverTest = await pushService.sendTestPush(settings.deviceId);
+    if (serverTest.ok) return;
+
+    await reminderService.triggerDemoNotification('forgotten');
+    window.alert('O teste local funcionou, mas o teste Web Push do servidor ainda nao foi concluido. Verifique as chaves VAPID e o ambiente Netlify.');
+  };
+
+  const handleTogglePushNotifications = async () => {
+    if (!settings) return;
+
+    const shouldEnable = settings.pushNotificationsEnabled === false;
+    if (!shouldEnable) {
+      await updateSettings({ pushNotificationsEnabled: false });
+      await pushService.syncReminderSchedules(settings.deviceId, []);
+      await pushService.unsubscribeDevice(settings.deviceId);
+      await refreshWebPushStatus();
+      return;
+    }
+
+    await activateWebPush();
   };
 
   const handleToggleIA = () => {
@@ -42,7 +158,7 @@ export default function Settings() {
   if (!settings) {
     return (
       <div className="view-container">
-        <p>Carregando preferências locais...</p>
+        <p>Carregando preferencias locais...</p>
       </div>
     );
   }
@@ -50,31 +166,41 @@ export default function Settings() {
   const daysOfWeek = [
     { value: 0, label: 'Domingo' },
     { value: 1, label: 'Segunda-feira' },
-    { value: 2, label: 'Terça-feira' },
+    { value: 2, label: 'Terca-feira' },
     { value: 3, label: 'Quarta-feira' },
     { value: 4, label: 'Quinta-feira' },
     { value: 5, label: 'Sexta-feira' },
-    { value: 6, label: 'Sábado' }
+    { value: 6, label: 'Sabado' }
   ];
+
+  const permissionLabel = permissionLabels[notificationPermission] || permissionLabels.default;
+  const permissionColor = notificationPermission === 'granted' ? 'var(--status-done)' : 'var(--priority-high)';
+  const pushEnabled = settings.pushNotificationsEnabled !== false;
+  const webPushLabel = !webPushStatus.supported
+    ? webPushLabels.unsupported
+    : !webPushStatus.configured
+      ? webPushLabels.missingServer
+      : webPushStatus.subscribed
+        ? webPushLabels.subscribed
+        : webPushLabels.ready;
+  const webPushColor = webPushStatus.subscribed ? 'var(--status-done)' : 'var(--text-muted)';
 
   return (
     <div className="view-container">
       <div className="ambient-glow glow-secondary" style={{ opacity: 0.08 }}></div>
 
       <div className="settings-grid">
-        
-        {/* GRUPO 1: INTELIGÊNCIA ARTIFICIAL */}
         <GlassCard className="settings-group">
           <h3 className="settings-title">
             <BrainCircuit size={18} style={{ color: 'var(--primary)', marginRight: '8px', verticalAlign: 'middle' }} />
-            Motor de Inteligência Artificial
+            Motor de Inteligencia Artificial
           </h3>
 
           <div className="settings-row">
             <div className="settings-info">
-              <span className="settings-label">Classificação Automática de Ideias</span>
+              <span className="settings-label">Classificacao Automatica de Ideias</span>
               <p className="settings-desc">
-                Quando ativado, a IA interpreta suas ideias brutas assim que salvas, sugerindo títulos resumidos, níveis de prioridade e tags de contexto automaticamente.
+                Quando ativado, a IA interpreta suas ideias brutas assim que salvas, sugerindo titulos resumidos, niveis de prioridade e tags de contexto automaticamente.
               </p>
             </div>
             <div className="settings-control">
@@ -88,44 +214,49 @@ export default function Settings() {
               </label>
             </div>
           </div>
-
-
         </GlassCard>
 
-        {/* GRUPO 2: LEMBRETES DO SISTEMA */}
         <GlassCard className="settings-group">
           <h3 className="settings-title">
             <Bell size={18} style={{ color: 'var(--secondary)', marginRight: '8px', verticalAlign: 'middle' }} />
             Agendamentos & Lembretes
           </h3>
 
-          {/* Notificação no SO */}
           <div className="settings-row">
             <div className="settings-info">
-              <span className="settings-label">Notificações do Navegador / SO</span>
+              <span className="settings-label">Notificacoes do Navegador / SO</span>
               <p className="settings-desc">
-                Status atual: <strong style={{ color: notificationPermission === 'granted' ? 'var(--status-done)' : 'var(--priority-high)' }}>
-                  {notificationPermission === 'granted' ? 'Permitido' : 'Bloqueado/Pendente'}
-                </strong>. Habilite para receber os lembretes do scanner em background.
+                Status atual: <strong style={{ color: permissionColor }}>{permissionLabel}</strong>. Push servidor: <strong style={{ color: webPushColor }}>{webPushLabel}</strong>.
               </p>
             </div>
             <div className="settings-control">
-              {notificationPermission !== 'granted' ? (
-                <button className="btn btn-sm btn-primary" onClick={handleRequestPermission}>
-                  Permitir
+              {notificationPermission === 'granted' ? (
+                <button
+                  className="btn btn-sm btn-secondary notification-action-btn"
+                  onClick={handleTestNotification}
+                  disabled={webPushBusy}
+                >
+                  <BellRing size={14} />
+                  Testar
                 </button>
               ) : (
-                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Ativo ✔</span>
+                <button
+                  className="btn btn-sm btn-primary notification-action-btn"
+                  onClick={handleRequestPermission}
+                  disabled={notificationPermission === 'unsupported' || webPushBusy}
+                >
+                  <Bell size={14} />
+                  Permitir
+                </button>
               )}
             </div>
           </div>
 
-          {/* Ideias e Tarefas Esquecidas */}
           <div className="settings-row">
             <div className="settings-info">
               <span className="settings-label">Intervalo de Alerta para Itens Esquecidos</span>
               <p className="settings-desc">
-                Tempo limite de inatividade (sem edições) para a IA notificar que uma ideia ou tarefa pendente precisa de atenção.
+                Tempo limite de inatividade para avisar que uma ideia ou tarefa pendente precisa ser verificada.
               </p>
             </div>
             <div className="settings-control">
@@ -146,12 +277,11 @@ export default function Settings() {
             </div>
           </div>
 
-          {/* Horário da Revisão Diária */}
           <div className="settings-row">
             <div className="settings-info">
-              <span className="settings-label">Horário de Revisão Diária</span>
+              <span className="settings-label">Horario de Revisao Diaria</span>
               <p className="settings-desc">
-                Dispara um resumo detalhado de ideias criadas, tarefas concluídas e pendências do dia.
+                Dispara um resumo de ideias criadas, tarefas concluidas e pendencias do dia.
               </p>
             </div>
             <div className="settings-control">
@@ -164,12 +294,11 @@ export default function Settings() {
             </div>
           </div>
 
-          {/* Dia da Revisão Semanal */}
           <div className="settings-row">
             <div className="settings-info">
-              <span className="settings-label">Dia da Revisão Semanal</span>
+              <span className="settings-label">Dia da Revisao Semanal</span>
               <p className="settings-desc">
-                Dia programado para consolidação geral das suas atividades e planejamento semanal.
+                Dia programado para consolidacao geral das suas atividades e planejamento semanal.
               </p>
             </div>
             <div className="settings-control">
@@ -178,19 +307,18 @@ export default function Settings() {
                 value={settings.weeklyReviewDay}
                 onChange={handleWeeklyDayChange}
               >
-                {daysOfWeek.map(day => (
+                {daysOfWeek.map((day) => (
                   <option key={day.value} value={day.value}>{day.label}</option>
                 ))}
               </select>
             </div>
           </div>
 
-          {/* Revisão Semanal Ativada */}
           <div className="settings-row">
             <div className="settings-info">
-              <span className="settings-label">Revisão Semanal Habilitada</span>
+              <span className="settings-label">Revisao Semanal Habilitada</span>
               <p className="settings-desc">
-                Quando ativado, a IA consolidará suas conquistas e metas semanais todos os domingos.
+                Quando ativado, o MindSync consolida conquistas e metas no dia configurado.
               </p>
             </div>
             <div className="settings-control">
@@ -205,12 +333,11 @@ export default function Settings() {
             </div>
           </div>
 
-          {/* Habilitar Scanner de Itens Esquecidos */}
           <div className="settings-row">
             <div className="settings-info">
               <span className="settings-label">Alertar Lembretes de Itens Esquecidos</span>
               <p className="settings-desc">
-                Ativa o scanner que avisa quando há ideias ou tarefas abandonadas no sistema sem alteração.
+                Ativa o scanner que identifica ideias ou tarefas abandonadas sem alteracao.
               </p>
             </div>
             <div className="settings-control">
@@ -225,32 +352,31 @@ export default function Settings() {
             </div>
           </div>
 
-          {/* Notificações Push Ativadas */}
           <div className="settings-row">
             <div className="settings-info">
-              <span className="settings-label">Notificações Push do Sistema</span>
+              <span className="settings-label">Notificacoes Push do Sistema</span>
               <p className="settings-desc">
-                Permite enviar resumos de IA e prazos em segundo plano para o seu SO.
+                Permite que os lembretes agendados aparecam como alertas nativos no dispositivo.
               </p>
             </div>
             <div className="settings-control">
               <label className="switch">
                 <input
                   type="checkbox"
-                  checked={settings.pushNotificationsEnabled !== false}
-                  onChange={() => updateSettings({ pushNotificationsEnabled: !settings.pushNotificationsEnabled })}
+                  checked={pushEnabled}
+                  onChange={handleTogglePushNotifications}
+                  disabled={webPushBusy}
                 />
                 <span className="slider"></span>
               </label>
             </div>
           </div>
 
-          {/* Captura de voz Habilitada */}
           <div className="settings-row">
             <div className="settings-info">
               <span className="settings-label">Captura por Voz Ativada</span>
               <p className="settings-desc">
-                Habilita a simulação física de microfone na barra de captura do Inbox.
+                Habilita a simulacao fisica de microfone na barra de captura do Inbox.
               </p>
             </div>
             <div className="settings-control">
@@ -265,12 +391,11 @@ export default function Settings() {
             </div>
           </div>
 
-          {/* Idioma da Interface */}
           <div className="settings-row">
             <div className="settings-info">
               <span className="settings-label">Idioma do Sistema</span>
               <p className="settings-desc">
-                Altera o idioma da interface de captura e das análises semânticas da IA.
+                Altera o idioma da interface de captura e das analises semanticas da IA.
               </p>
             </div>
             <div className="settings-control">
@@ -279,24 +404,20 @@ export default function Settings() {
                 value={settings.language || 'pt-BR'}
                 onChange={(e) => updateSettings({ language: e.target.value })}
               >
-                <option value="pt-BR">Português (pt-BR)</option>
+                <option value="pt-BR">Portugues (pt-BR)</option>
                 <option value="en-US">English (en-US)</option>
-                <option value="es-ES">Español (es-ES)</option>
+                <option value="es-ES">Espanol (es-ES)</option>
               </select>
             </div>
           </div>
-
         </GlassCard>
- 
-         {/* NOTA DE PRIVACIDADE */}
-         <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', padding: '12px 16px', background: 'var(--bg-secondary)', border: '1px solid var(--glass-border)', borderRadius: 'var(--radius-md)' }}>
-           <ShieldAlert size={18} style={{ color: 'var(--text-muted)', flexShrink: 0, marginTop: '2px' }} />
-           <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
-             <strong>Nota de Privacidade:</strong> MindSync funciona sob arquitetura Offline-First. Toda inteligência, metadados e conteúdos de ideias são persistidos de forma segura no IndexedDB no seu navegador local. Seus dados nunca saem do seu dispositivo sem a sua autorização.
-           </p>
-         </div>
 
-
+        <div className="privacy-note">
+          <ShieldAlert size={18} style={{ color: 'var(--text-muted)', flexShrink: 0, marginTop: '2px' }} />
+          <p>
+            <strong>Nota de Privacidade:</strong> MindSync funciona Offline-First. Ao ativar Web Push, o servidor guarda apenas a inscricao do dispositivo e metadados minimos dos lembretes necessarios para disparar alertas com o app fechado.
+          </p>
+        </div>
       </div>
     </div>
   );

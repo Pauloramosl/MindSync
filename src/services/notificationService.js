@@ -1,36 +1,88 @@
 import { db } from '../database/db';
-import { ideaRepository } from '../repositories/ideaRepository';
-import { taskRepository } from '../repositories/taskRepository';
 import { notificationRepository } from '../repositories/notificationRepository';
 import { reviewRepository } from '../repositories/reviewRepository';
 import { userPreferenceService } from './userPreferenceService';
 import { reminderService } from './reminderService';
+import { pushService } from './pushService';
+
+const USER_ID = 'user-default-123';
+const DEFAULT_FORGOTTEN_HOURS = 4;
+const SCANNER_INTERVAL_MS = 30000;
+const INITIAL_SCAN_DELAY_MS = 2000;
+const DEADLINE_LOOKAHEAD_MS = 15 * 60 * 1000;
+const PUSH_SYNC_DEBOUNCE_MS = 1200;
+
+const TARGET_VIEW = {
+  idea: 'brainstorm',
+  task: 'tasks',
+  daily_review: 'review',
+  weekly_review: 'review'
+};
+
+function normalizeForgottenHours(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_FORGOTTEN_HOURS;
+}
+
+function formatHours(hours) {
+  return `${hours} ${hours === 1 ? 'hora' : 'horas'}`;
+}
+
+function getLastActivityAt(item) {
+  return Number(item.updatedAt || item.createdAt || 0);
+}
+
+function getNotificationUrl(notification) {
+  const view = TARGET_VIEW[notification.targetType] || 'inbox';
+  const params = new URLSearchParams({
+    view,
+    targetType: notification.targetType,
+    targetId: notification.targetId
+  });
+
+  return `/?${params.toString()}`;
+}
 
 class NotificationService {
   constructor() {
     this.scannerId = null;
+    this.initialScanTimerId = null;
+    this.pushSyncTimerId = null;
+    this.lastPushSyncSignature = '';
   }
 
   /**
-   * Inicializa o loop de checagem inteligente de lembretes e prazos (roda a cada 30 segundos)
+   * Inicializa o scanner local que cria e despacha notificacoes enquanto o app/PWA esta ativo.
    */
   startBackgroundScanner() {
-    if (this.scannerId) clearInterval(this.scannerId);
+    this.stopBackgroundScanner();
 
-    // Primeira varredura rápida após 2s
-    setTimeout(() => this.runScannerTick(), 2000);
-
-    this.scannerId = setInterval(() => {
+    this.initialScanTimerId = window.setTimeout(() => {
+      this.initialScanTimerId = null;
       this.runScannerTick();
-    }, 30000); // 30 segundos
+    }, INITIAL_SCAN_DELAY_MS);
+
+    this.scannerId = window.setInterval(() => {
+      this.runScannerTick();
+    }, SCANNER_INTERVAL_MS);
 
     console.log('[Notification Service]: Scanner em segundo plano inicializado.');
   }
 
   stopBackgroundScanner() {
+    if (this.initialScanTimerId) {
+      window.clearTimeout(this.initialScanTimerId);
+      this.initialScanTimerId = null;
+    }
+
     if (this.scannerId) {
-      clearInterval(this.scannerId);
+      window.clearInterval(this.scannerId);
       this.scannerId = null;
+    }
+
+    if (this.pushSyncTimerId) {
+      window.clearTimeout(this.pushSyncTimerId);
+      this.pushSyncTimerId = null;
     }
   }
 
@@ -40,346 +92,473 @@ class NotificationService {
       if (!preferences) return;
 
       const now = Date.now();
+      const forgottenHours = normalizeForgottenHours(preferences.forgottenIdeasTime);
 
-      // 1. Scanner de Ideias e Tarefas Esquecidas (padrão 4 horas)
-      if (preferences.forgottenIdeasEnabled !== false && preferences.forgottenIdeasTime > 0) {
+      if (preferences.forgottenIdeasEnabled !== false && forgottenHours > 0) {
         await this.scanForgottenIdeas(preferences, now);
         await this.scanForgottenTasks(preferences, now);
       }
 
-      // 2. Scanner de Tarefas com Deadline ou ReminderAt
       await this.scanTaskDeadlines(now);
-
-      // 3. Checagem de Lembretes de Revisão Diária (padrão 20:00)
       await this.checkDailyReviewTrigger(preferences, now);
 
-      // 4. Checagem de Lembretes de Revisão Semanal (padrão Domingo às 18:00)
       if (preferences.weeklyReviewEnabled) {
         await this.checkWeeklyReviewTrigger(preferences, now);
       }
 
-      // 5. Despachar notificações agendadas e pendentes que caíram no prazo
-      await this.dispatchPendingNotifications(now);
-
+      await this.dispatchPendingNotifications(now, preferences);
+      await this.syncRemotePushSchedules(preferences, Date.now());
     } catch (err) {
-      console.error('[Notification Service]: Falha na execução do scanner tick:', err);
+      console.error('[Notification Service]: Falha na execucao do scanner tick:', err);
     }
   }
 
-  /**
-   * Varre por ideias inativas e gera alertas
-   */
+  async getLastNotification(targetId, type, reason) {
+    const notifications = await db.notifications
+      .where('targetId')
+      .equals(targetId)
+      .filter((notification) => {
+        if (notification.type !== type) return false;
+        if (reason && notification.reason !== reason) return false;
+        return true;
+      })
+      .toArray();
+
+    return notifications.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0] || null;
+  }
+
+  async countNotifications(targetId, type, reason) {
+    return db.notifications
+      .where('targetId')
+      .equals(targetId)
+      .filter((notification) => {
+        if (notification.type !== type) return false;
+        if (reason && notification.reason !== reason) return false;
+        return true;
+      })
+      .count();
+  }
+
+  async shouldCreateIntervalReminder(targetId, type, reason, intervalMs, now) {
+    const lastNotification = await this.getLastNotification(targetId, type, reason);
+    if (!lastNotification) return true;
+
+    const lastAt = Number(lastNotification.sentAt || lastNotification.createdAt || 0);
+    return now - lastAt >= intervalMs;
+  }
+
+  async getNextIntervalReminderAt(targetId, type, reason, intervalMs, lastActivityAt) {
+    const lastNotification = await this.getLastNotification(targetId, type, reason);
+    const lastNotificationAt = Number(lastNotification?.sentAt || lastNotification?.createdAt || 0);
+    return Math.max(Number(lastActivityAt || 0), lastNotificationAt) + intervalMs;
+  }
+
   async scanForgottenIdeas(preferences, now) {
-    const thresholdHours = preferences.forgottenIdeasTime || 4;
+    const thresholdHours = normalizeForgottenHours(preferences.forgottenIdeasTime);
     const thresholdMs = thresholdHours * 60 * 60 * 1000;
 
-    // Busca todas as ideias pendentes no Inbox
     const allIdeas = await db.ideas
       .where('status')
       .anyOf(['new', 'review'])
       .toArray();
 
-    const forgotten = allIdeas.filter(idea => {
-      const timePassed = now - idea.updatedAt;
-      return timePassed >= thresholdMs && !idea.isArchived;
+    const forgotten = allIdeas.filter((idea) => {
+      if (idea.isArchived) return false;
+      return now - getLastActivityAt(idea) >= thresholdMs;
     });
 
     for (const idea of forgotten) {
-      // Busca a última notificação enviada para esta ideia
-      const lastNotification = await db.notifications
-        .where('targetId')
-        .equals(idea.id)
-        .filter(n => n.type === 'idea_reminder')
-        .reverse()
-        .first();
+      const shouldNotify = await this.shouldCreateIntervalReminder(
+        idea.id,
+        'idea_reminder',
+        'forgotten',
+        thresholdMs,
+        now
+      );
 
-      let shouldNotify = false;
-      if (!lastNotification) {
-        // Se nunca foi notificado, envia agora
-        shouldNotify = true;
-      } else {
-        // Se já foi notificado, verifica se passou outro intervalo de limite desde a última notificação
-        const elapsedSinceLast = now - lastNotification.createdAt;
-        if (elapsedSinceLast >= thresholdMs) {
-          shouldNotify = true;
-        }
-      }
+      if (!shouldNotify) continue;
 
-      if (shouldNotify) {
-        // Conta quantas notificações já enviamos para esta ideia para gerar o número do lembrete
-        const totalSent = await db.notifications
-          .where('targetId')
-          .equals(idea.id)
-          .filter(n => n.type === 'idea_reminder')
-          .count();
+      const totalSent = await this.countNotifications(idea.id, 'idea_reminder', 'forgotten');
+      const suffix = totalSent > 0 ? ` #${totalSent + 1}` : '';
+      const safeTitle = idea.title || 'Ideia sem titulo';
 
-        const title = 'Ideia Esquecida! 💡';
-        const suffix = totalSent > 0 ? ` (Lembrete #${totalSent + 1})` : '';
-        const body = `Você capturou a ideia "${idea.title}" e ela continua pendente de revisão há mais de ${thresholdHours} horas.${suffix}`;
-        
-        await notificationRepository.add({
-          userId: 'user-default-123',
-          targetType: 'idea',
-          targetId: idea.id,
-          title: `${title}${suffix}`,
-          body,
-          type: 'idea_reminder',
-          status: 'scheduled',
-          scheduledAt: now,
-          createdAt: now
-        });
-      }
+      await notificationRepository.add({
+        userId: USER_ID,
+        targetType: 'idea',
+        targetId: idea.id,
+        title: `Ideia pendente para revisar${suffix}`,
+        body: `Voce deixou "${safeTitle}" pendente ha mais de ${formatHours(thresholdHours)}. Toque para verificar.`,
+        type: 'idea_reminder',
+        reason: 'forgotten',
+        status: 'scheduled',
+        scheduledAt: now,
+        createdAt: now
+      });
     }
   }
 
-  /**
-   * Varre por tarefas pendentes inativas e gera alertas
-   */
   async scanForgottenTasks(preferences, now) {
-    const thresholdHours = preferences.forgottenIdeasTime || 4;
+    const thresholdHours = normalizeForgottenHours(preferences.forgottenIdeasTime);
     const thresholdMs = thresholdHours * 60 * 60 * 1000;
 
-    // Busca todas as tarefas que não estão concluídas e não estão arquivadas
     const allTasks = await db.tasks.toArray();
-    const forgotten = allTasks.filter(task => {
+    const forgotten = allTasks.filter((task) => {
       if (task.status === 'done' || task.isArchived) return false;
-      const timePassed = now - task.updatedAt;
-      return timePassed >= thresholdMs;
+      return now - getLastActivityAt(task) >= thresholdMs;
     });
 
     for (const task of forgotten) {
-      // Busca a última notificação enviada para esta tarefa
-      const lastNotification = await db.notifications
-        .where('targetId')
-        .equals(task.id)
-        .filter(n => n.type === 'task_reminder')
-        .reverse()
-        .first();
+      const shouldNotify = await this.shouldCreateIntervalReminder(
+        task.id,
+        'task_reminder',
+        'forgotten',
+        thresholdMs,
+        now
+      );
 
-      let shouldNotify = false;
-      if (!lastNotification) {
-        // Se nunca foi notificado, envia agora
-        shouldNotify = true;
-      } else {
-        // Se já foi notificado, verifica se passou outro intervalo de limite desde a última notificação
-        const elapsedSinceLast = now - lastNotification.createdAt;
-        if (elapsedSinceLast >= thresholdMs) {
-          shouldNotify = true;
-        }
-      }
+      if (!shouldNotify) continue;
 
-      if (shouldNotify) {
-        const totalSent = await db.notifications
-          .where('targetId')
-          .equals(task.id)
-          .filter(n => n.type === 'task_reminder')
-          .count();
+      const totalSent = await this.countNotifications(task.id, 'task_reminder', 'forgotten');
+      const suffix = totalSent > 0 ? ` #${totalSent + 1}` : '';
+      const safeTitle = task.title || 'Tarefa sem titulo';
 
-        const title = 'Tarefa Esquecida! 📅';
-        const suffix = totalSent > 0 ? ` (Lembrete #${totalSent + 1})` : '';
-        const body = `A tarefa "${task.title}" está pendente e sem atualizações há mais de ${thresholdHours} horas. Vamos dar um passo de ação nela?${suffix}`;
-
-        await notificationRepository.add({
-          userId: 'user-default-123',
-          targetType: 'task',
-          targetId: task.id,
-          title: `${title}${suffix}`,
-          body,
-          type: 'task_reminder',
-          status: 'scheduled',
-          scheduledAt: now,
-          createdAt: now
-        });
-      }
+      await notificationRepository.add({
+        userId: USER_ID,
+        targetType: 'task',
+        targetId: task.id,
+        title: `Tarefa pendente para verificar${suffix}`,
+        body: `A tarefa "${safeTitle}" esta parada ha mais de ${formatHours(thresholdHours)}. Toque para retomar.`,
+        type: 'task_reminder',
+        reason: 'forgotten',
+        status: 'scheduled',
+        scheduledAt: now,
+        createdAt: now
+      });
     }
   }
 
-  /**
-   * Varre por prazos de tarefas iminentes
-   */
   async scanTaskDeadlines(now) {
     const tasks = await db.tasks.toArray();
-    
-    // Filtra tarefas ativas com prazo ou lembrete nos próximos 15 minutos
-    const limitAhead = 15 * 60 * 1000;
 
-    const nearTasks = tasks.filter(task => {
+    const nearTasks = tasks.filter((task) => {
       if (task.status === 'done' || task.isArchived) return false;
-      
-      const deadline = task.deadline;
-      const reminderAt = task.reminderAt;
 
-      // Alerta se o prazo está a menos de 15 minutos ou se o reminderAt já passou
-      const matchesDeadline = deadline && (deadline - now > 0) && (deadline - now <= limitAhead);
-      const matchesReminder = reminderAt && (reminderAt - now > 0) && (reminderAt - now <= limitAhead);
+      const deadline = Number(task.deadline || 0);
+      const reminderAt = Number(task.reminderAt || 0);
+      const matchesDeadline = deadline > now && deadline - now <= DEADLINE_LOOKAHEAD_MS;
+      const matchesReminder = reminderAt > 0 && reminderAt <= now;
 
       return matchesDeadline || matchesReminder;
     });
 
     for (const task of nearTasks) {
-      const todayStr = new Date().toDateString();
-      const existing = await db.notifications
-        .where('targetId')
-        .equals(task.id)
-        .filter(n => n.type === 'task_reminder' && new Date(n.createdAt).toDateString() === todayStr)
-        .first();
+      const existing = await this.getLastNotification(task.id, 'task_reminder', 'deadline');
+      if (existing) continue;
 
-      if (!existing) {
-        const title = 'Prazo de Tarefa Iminente! 📅';
-        const body = `A tarefa "${task.title}" está com prazo próximo. Não se esqueça de concluir!`;
+      const safeTitle = task.title || 'Tarefa sem titulo';
 
-        await notificationRepository.add({
-          userId: 'user-default-123',
-          targetType: 'task',
-          targetId: task.id,
-          title,
-          body,
-          type: 'task_reminder',
-          status: 'scheduled',
-          scheduledAt: now,
-          createdAt: now
-        });
-      }
+      await notificationRepository.add({
+        userId: USER_ID,
+        targetType: 'task',
+        targetId: task.id,
+        title: 'Prazo de tarefa chegando',
+        body: `A tarefa "${safeTitle}" precisa da sua atencao agora.`,
+        type: 'task_reminder',
+        reason: 'deadline',
+        status: 'scheduled',
+        scheduledAt: now,
+        createdAt: now
+      });
     }
   }
 
-  /**
-   * Consolida estatísticas e dispara a Revisão Diária agendada
-   */
   async checkDailyReviewTrigger(preferences, now) {
     const nowDate = new Date(now);
     const dailyReviewTimeStr = preferences.dailyReviewTime || '20:00';
     const currentHourMin = `${String(nowDate.getHours()).padStart(2, '0')}:${String(nowDate.getMinutes()).padStart(2, '0')}`;
 
-    if (currentHourMin === dailyReviewTimeStr) {
-      const lastTrigger = localStorage.getItem('last_daily_review_trigger');
-      const todayStr = nowDate.toDateString();
+    if (currentHourMin !== dailyReviewTimeStr) return;
 
-      if (lastTrigger !== todayStr) {
-        localStorage.setItem('last_daily_review_trigger', todayStr);
+    const lastTrigger = localStorage.getItem('last_daily_review_trigger');
+    const todayStr = nowDate.toDateString();
+    if (lastTrigger === todayStr) return;
 
-        // Consolidação de estatísticas locais de hoje
-        const todayStart = new Date(now);
-        todayStart.setHours(0, 0, 0, 0);
-        const startMs = todayStart.getTime();
+    localStorage.setItem('last_daily_review_trigger', todayStr);
 
-        const allIdeas = await db.ideas.toArray();
-        const allTasks = await db.tasks.toArray();
+    const todayStart = new Date(now);
+    todayStart.setHours(0, 0, 0, 0);
+    const startMs = todayStart.getTime();
 
-        const newIdeasCount = allIdeas.filter(i => i.createdAt >= startMs).length;
-        const completedIdeasCount = allIdeas.filter(i => i.status === 'completed' && i.updatedAt >= startMs).length;
-        const openTasksCount = allTasks.filter(t => t.status !== 'done').length;
-        const completedTasksCount = allTasks.filter(t => t.status === 'done' && t.createdAt >= startMs).length;
-        
-        // Criar registro na tabela daily_reviews
-        const reviewRecord = await reviewRepository.addDailyReview({
-          userId: 'user-default-123',
-          date: todayStr,
-          totalIdeas: newIdeasCount,
-          completedIdeas: completedIdeasCount,
-          openTasks: openTasksCount,
-          completedTasks: completedTasksCount,
-          pendingReminders: 0
-        });
+    const allIdeas = await db.ideas.toArray();
+    const allTasks = await db.tasks.toArray();
 
-        // Adicionar notificação para despacho
-        await notificationRepository.add({
-          userId: 'user-default-123',
-          targetType: 'daily_review',
-          targetId: reviewRecord.id || `review-${Date.now()}`,
-          title: 'Sua Revisão Diária está pronta! 📊',
-          body: `Você capturou ${newIdeasCount} ideias e concluiu ${completedTasksCount} tarefas hoje. Clique para fazer seu balanço diário.`,
-          type: 'daily_review',
-          status: 'scheduled',
-          scheduledAt: now,
-          createdAt: now
-        });
-      }
-    }
+    const newIdeasCount = allIdeas.filter((idea) => idea.createdAt >= startMs).length;
+    const completedIdeasCount = allIdeas.filter((idea) => idea.status === 'completed' && idea.updatedAt >= startMs).length;
+    const openTasksCount = allTasks.filter((task) => task.status !== 'done').length;
+    const completedTasksCount = allTasks.filter((task) => task.status === 'done' && task.updatedAt >= startMs).length;
+
+    const reviewRecord = await reviewRepository.addDailyReview({
+      userId: USER_ID,
+      date: todayStr,
+      totalIdeas: newIdeasCount,
+      completedIdeas: completedIdeasCount,
+      openTasks: openTasksCount,
+      completedTasks: completedTasksCount,
+      pendingReminders: 0
+    });
+
+    await notificationRepository.add({
+      userId: USER_ID,
+      targetType: 'daily_review',
+      targetId: reviewRecord.id || `review-${Date.now()}`,
+      title: 'Revisao diaria pronta',
+      body: `Voce capturou ${newIdeasCount} ideias e concluiu ${completedTasksCount} tarefas hoje. Toque para revisar.`,
+      type: 'daily_review',
+      status: 'scheduled',
+      scheduledAt: now,
+      createdAt: now
+    });
   }
 
-  /**
-   * Consolida estatísticas e dispara a Revisão Semanal agendada
-   */
   async checkWeeklyReviewTrigger(preferences, now) {
     const nowDate = new Date(now);
-    const weeklyReviewDay = preferences.weeklyReviewDay ?? 0; // 0 = Domingo
+    const weeklyReviewDay = preferences.weeklyReviewDay ?? 0;
     const weeklyReviewTimeStr = preferences.weeklyReviewTime || '18:00';
     const currentHourMin = `${String(nowDate.getHours()).padStart(2, '0')}:${String(nowDate.getMinutes()).padStart(2, '0')}`;
 
-    if (nowDate.getDay() === weeklyReviewDay && currentHourMin === weeklyReviewTimeStr) {
-      const lastTriggerWeekly = localStorage.getItem('last_weekly_review_trigger');
-      const todayStr = nowDate.toDateString();
+    if (nowDate.getDay() !== weeklyReviewDay || currentHourMin !== weeklyReviewTimeStr) return;
 
-      if (lastTriggerWeekly !== todayStr) {
-        localStorage.setItem('last_weekly_review_trigger', todayStr);
+    const lastTriggerWeekly = localStorage.getItem('last_weekly_review_trigger');
+    const todayStr = nowDate.toDateString();
+    if (lastTriggerWeekly === todayStr) return;
 
-        // Consolidação de estatísticas da semana (últimos 7 dias)
-        const weekStartMs = now - 7 * 24 * 60 * 60 * 1000;
+    localStorage.setItem('last_weekly_review_trigger', todayStr);
 
-        const allIdeas = await db.ideas.toArray();
-        const allTasks = await db.tasks.toArray();
+    const weekStartMs = now - 7 * 24 * 60 * 60 * 1000;
+    const allIdeas = await db.ideas.toArray();
+    const allTasks = await db.tasks.toArray();
 
-        const weeklyNewIdeas = allIdeas.filter(i => i.createdAt >= weekStartMs).length;
-        const weeklyCompletedIdeas = allIdeas.filter(i => i.status === 'completed' && i.updatedAt >= weekStartMs).length;
-        const weeklyOpenTasks = allTasks.filter(t => t.status !== 'done').length;
-        const weeklyCompletedTasks = allTasks.filter(t => t.status === 'done' && t.createdAt >= weekStartMs).length;
+    const weeklyNewIdeas = allIdeas.filter((idea) => idea.createdAt >= weekStartMs).length;
+    const weeklyCompletedIdeas = allIdeas.filter((idea) => idea.status === 'completed' && idea.updatedAt >= weekStartMs).length;
+    const weeklyOpenTasks = allTasks.filter((task) => task.status !== 'done').length;
+    const weeklyCompletedTasks = allTasks.filter((task) => task.status === 'done' && task.updatedAt >= weekStartMs).length;
 
-        // Criar registro na tabela weekly_reviews
-        const reviewRecord = await reviewRepository.addWeeklyReview({
-          userId: 'user-default-123',
-          weekStart: weekStartMs,
-          weekEnd: now,
-          totalIdeas: weeklyNewIdeas,
-          completedIdeas: weeklyCompletedIdeas,
-          openTasks: weeklyOpenTasks,
-          completedTasks: weeklyCompletedTasks,
-          remindersTriggered: 0
-        });
+    const reviewRecord = await reviewRepository.addWeeklyReview({
+      userId: USER_ID,
+      weekStart: weekStartMs,
+      weekEnd: now,
+      totalIdeas: weeklyNewIdeas,
+      completedIdeas: weeklyCompletedIdeas,
+      openTasks: weeklyOpenTasks,
+      completedTasks: weeklyCompletedTasks,
+      remindersTriggered: 0
+    });
 
-        // Adicionar notificação para despacho
-        await notificationRepository.add({
-          userId: 'user-default-123',
-          targetType: 'weekly_review',
-          targetId: reviewRecord.id || `weekly-${Date.now()}`,
-          title: 'Balanço Semanal Disponível! 📈',
-          body: `Uma semana produtiva se encerrou. Você gerou ${weeklyNewIdeas} ideias e completou ${weeklyCompletedTasks} tarefas. Vamos revisar?`,
-          type: 'weekly_review',
-          status: 'scheduled',
-          scheduledAt: now,
-          createdAt: now
-        });
-      }
+    await notificationRepository.add({
+      userId: USER_ID,
+      targetType: 'weekly_review',
+      targetId: reviewRecord.id || `weekly-${Date.now()}`,
+      title: 'Balanco semanal disponivel',
+      body: `Voce gerou ${weeklyNewIdeas} ideias e completou ${weeklyCompletedTasks} tarefas. Toque para planejar a semana.`,
+      type: 'weekly_review',
+      status: 'scheduled',
+      scheduledAt: now,
+      createdAt: now
+    });
+  }
+
+  getNativeNotificationOptions(notification) {
+    const view = TARGET_VIEW[notification.targetType] || 'inbox';
+    const url = getNotificationUrl(notification);
+
+    return {
+      body: notification.body,
+      tag: `mindsync-${notification.type}-${notification.reason || 'general'}-${notification.targetId}`,
+      data: {
+        notificationId: notification.id,
+        targetType: notification.targetType,
+        targetId: notification.targetId,
+        view,
+        url
+      },
+      actions: [
+        { action: 'open', title: 'Verificar' },
+        { action: 'dismiss', title: 'Depois' }
+      ]
+    };
+  }
+
+  async dismissPendingNotifications(pending, now) {
+    for (const notification of pending) {
+      await notificationRepository.update(notification.id, {
+        status: 'dismissed',
+        dismissedAt: now
+      });
     }
   }
 
-  /**
-   * Despacha todas as notificações locais agendadas que caíram na janela de disparo
-   */
-  async dispatchPendingNotifications(now) {
+  async dispatchPendingNotifications(now, preferences) {
     const pending = await notificationRepository.getPendingTrigger(now);
-    
+    if (pending.length === 0) return;
+
+    if (preferences.pushNotificationsEnabled === false) {
+      await this.dismissPendingNotifications(pending, now);
+      return;
+    }
+
+    if (!reminderService.hasPermission()) {
+      console.log('[Notification Service]: Permissao de notificacao ainda nao concedida. Alertas permanecem agendados.');
+      return;
+    }
+
     for (const notification of pending) {
       try {
-        // Envia notificação real de sistema via reminderService
-        reminderService.sendNotification(notification.title, {
-          body: notification.body,
-          tag: notification.targetId
-        });
+        const sent = await reminderService.sendNotification(
+          notification.title,
+          this.getNativeNotificationOptions(notification)
+        );
 
-        // Atualiza status no banco local
+        if (!sent) return;
+
         await notificationRepository.update(notification.id, {
           status: 'sent',
           sentAt: Date.now()
         });
-        
+
         console.log(`[Notification Service]: Alerta enviado: "${notification.title}"`);
       } catch (err) {
-        console.error('[Notification Service]: Falha ao despachar notificação:', err);
+        console.error('[Notification Service]: Falha ao despachar notificacao:', err);
         await notificationRepository.update(notification.id, {
           status: 'failed'
         });
       }
+    }
+  }
+
+  queuePushScheduleSync(delay = PUSH_SYNC_DEBOUNCE_MS) {
+    if (this.pushSyncTimerId) {
+      window.clearTimeout(this.pushSyncTimerId);
+    }
+
+    this.pushSyncTimerId = window.setTimeout(() => {
+      this.pushSyncTimerId = null;
+      this.syncRemotePushSchedules().catch((err) => {
+        console.warn('[Notification Service]: Falha ao sincronizar agenda Web Push:', err);
+      });
+    }, delay);
+  }
+
+  async buildRemoteForgottenReminders(preferences, now) {
+    if (
+      preferences.pushNotificationsEnabled === false ||
+      preferences.forgottenIdeasEnabled === false
+    ) {
+      return [];
+    }
+
+    const thresholdHours = normalizeForgottenHours(preferences.forgottenIdeasTime);
+    const thresholdMs = thresholdHours * 60 * 60 * 1000;
+    const [ideas, tasks] = await Promise.all([
+      db.ideas.where('status').anyOf(['new', 'review']).toArray(),
+      db.tasks.toArray()
+    ]);
+    const reminders = [];
+
+    for (const idea of ideas) {
+      if (idea.isArchived) continue;
+
+      const lastActivityAt = getLastActivityAt(idea);
+      const dueAt = await this.getNextIntervalReminderAt(
+        idea.id,
+        'idea_reminder',
+        'forgotten',
+        thresholdMs,
+        lastActivityAt
+      );
+      const target = {
+        targetType: 'idea',
+        targetId: idea.id
+      };
+      const safeTitle = idea.title || 'Ideia sem titulo';
+
+      reminders.push({
+        id: `idea:${idea.id}:forgotten`,
+        targetType: target.targetType,
+        targetId: target.targetId,
+        type: 'idea_reminder',
+        reason: 'forgotten',
+        title: 'Ideia pendente para revisar',
+        body: `Voce deixou "${safeTitle}" pendente ha mais de ${formatHours(thresholdHours)}. Toque para verificar.`,
+        tag: `mindsync-idea-forgotten-${idea.id}`,
+        view: TARGET_VIEW.idea,
+        url: getNotificationUrl(target),
+        dueAt: Math.max(dueAt, now),
+        repeatIntervalMs: thresholdMs,
+        lastActivityAt
+      });
+    }
+
+    for (const task of tasks) {
+      if (task.status === 'done' || task.isArchived) continue;
+
+      const lastActivityAt = getLastActivityAt(task);
+      const dueAt = await this.getNextIntervalReminderAt(
+        task.id,
+        'task_reminder',
+        'forgotten',
+        thresholdMs,
+        lastActivityAt
+      );
+      const target = {
+        targetType: 'task',
+        targetId: task.id
+      };
+      const safeTitle = task.title || 'Tarefa sem titulo';
+
+      reminders.push({
+        id: `task:${task.id}:forgotten`,
+        targetType: target.targetType,
+        targetId: target.targetId,
+        type: 'task_reminder',
+        reason: 'forgotten',
+        title: 'Tarefa pendente para verificar',
+        body: `A tarefa "${safeTitle}" esta parada ha mais de ${formatHours(thresholdHours)}. Toque para retomar.`,
+        tag: `mindsync-task-forgotten-${task.id}`,
+        view: TARGET_VIEW.task,
+        url: getNotificationUrl(target),
+        dueAt: Math.max(dueAt, now),
+        repeatIntervalMs: thresholdMs,
+        lastActivityAt
+      });
+    }
+
+    return reminders;
+  }
+
+  async syncRemotePushSchedules(preferences = null, now = Date.now(), force = false) {
+    const appPreferences = preferences || await userPreferenceService.getPreferences();
+    const deviceId = appPreferences?.deviceId;
+    if (!deviceId) return;
+
+    const reminders = await this.buildRemoteForgottenReminders(appPreferences, now);
+    const signature = JSON.stringify({
+      deviceId,
+      enabled: appPreferences.pushNotificationsEnabled !== false,
+      reminders: reminders.map((reminder) => ({
+        id: reminder.id,
+        dueAt: reminder.dueAt,
+        repeatIntervalMs: reminder.repeatIntervalMs,
+        lastActivityAt: reminder.lastActivityAt,
+        title: reminder.title,
+        body: reminder.body
+      }))
+    });
+
+    if (!force && signature === this.lastPushSyncSignature) return;
+
+    const result = await pushService.syncReminderSchedules(deviceId, reminders);
+    if (result.ok) {
+      this.lastPushSyncSignature = signature;
     }
   }
 }

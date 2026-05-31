@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ThemeProvider } from './store/ThemeContext';
 import { ToastProvider } from './store/ToastContext';
 import { IdeasProvider, useIdeas } from './store/IdeasContext';
@@ -7,7 +7,6 @@ import Sidebar from './components/layout/Sidebar';
 import Header from './components/layout/Header';
 import MobileNav from './components/layout/MobileNav';
 import MobileVoiceCapture from './components/layout/MobileVoiceCapture';
-import { Mic, X } from 'lucide-react';
 
 // Telas (Views)
 import Inbox from './views/Inbox';
@@ -18,10 +17,36 @@ import Settings from './views/Settings';
 
 import './App.css';
 
+const VALID_VIEWS = new Set(['inbox', 'brainstorm', 'tasks', 'review', 'settings']);
+
+function normalizeView(view) {
+  return VALID_VIEWS.has(view) ? view : 'inbox';
+}
+
+function getInitialView() {
+  if (typeof window === 'undefined') return 'inbox';
+  const params = new URLSearchParams(window.location.search);
+  return normalizeView(params.get('view'));
+}
+
 function MainApp() {
-  const [activeView, setActiveView] = useState('inbox');
+  const [activeView, setActiveView] = useState(getInitialView);
   const [showMobileVoiceCapture, setShowMobileVoiceCapture] = useState(false);
   const { addIdea } = useIdeas();
+
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return undefined;
+
+    const handleServiceWorkerMessage = (event) => {
+      if (event.data?.type !== 'OPEN_NOTIFICATION_TARGET') return;
+      setActiveView(normalizeView(event.data.view));
+    };
+
+    navigator.serviceWorker.addEventListener('message', handleServiceWorkerMessage);
+    return () => {
+      navigator.serviceWorker.removeEventListener('message', handleServiceWorkerMessage);
+    };
+  }, []);
 
   const renderActiveView = () => {
     switch (activeView) {

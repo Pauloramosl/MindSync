@@ -2,7 +2,6 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { ideaService } from '../services/ideaService';
 import { userPreferenceService } from '../services/userPreferenceService';
 import { notificationService } from '../services/notificationService';
-import { reminderService } from '../services/reminderService';
 
 const IdeasContext = createContext();
 
@@ -38,9 +37,6 @@ export function IdeasProvider({ children }) {
   // Inicializa varredura em segundo plano para ideias esquecidas e prazos
   useEffect(() => {
     if (settings) {
-      // Solicita permissões de notificação ao carregar as configurações
-      reminderService.requestPermission();
-      
       // Inicia varredor inteligente em background (Etapa 4)
       notificationService.startBackgroundScanner();
     }
@@ -66,10 +62,12 @@ export function IdeasProvider({ children }) {
       const saved = await ideaService.addIdea(text, type, mediaUrl);
       // Insere provisoriamente no estado para resposta instantânea
       setIdeas(prev => [saved, ...prev]);
+      notificationService.queuePushScheduleSync();
       
       // Agenda um refresh curto para carregar o título gerado pela IA
       setTimeout(async () => {
         await refreshIdeas();
+        notificationService.queuePushScheduleSync();
       }, 3500);
 
       return saved;
@@ -85,6 +83,7 @@ export function IdeasProvider({ children }) {
     try {
       const updated = await ideaService.updateIdea(id, updates);
       setIdeas(prev => prev.map(item => item.id === id ? updated : item));
+      notificationService.queuePushScheduleSync();
     } catch (err) {
       console.error('Erro ao atualizar ideia:', err);
     }
@@ -97,6 +96,7 @@ export function IdeasProvider({ children }) {
     try {
       await ideaService.deleteIdea(id);
       setIdeas(prev => prev.filter(item => item.id !== id));
+      notificationService.queuePushScheduleSync();
     } catch (err) {
       console.error('Erro ao excluir ideia:', err);
     }
@@ -109,6 +109,7 @@ export function IdeasProvider({ children }) {
     try {
       const updatedSettings = await userPreferenceService.updatePreferences(updates);
       setSettings(updatedSettings);
+      notificationService.queuePushScheduleSync(0);
     } catch (err) {
       console.error('Erro ao atualizar configurações:', err);
     }
